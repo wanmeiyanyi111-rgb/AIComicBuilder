@@ -1,8 +1,5 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { projects } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { addImportLog, extractTextFromFile } from "@/lib/import-utils";
 
 export const maxDuration = 60;
@@ -12,12 +9,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: projectId } = await params;
-  const userId = getUserIdFromRequest(request);
-
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(request, projectId);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

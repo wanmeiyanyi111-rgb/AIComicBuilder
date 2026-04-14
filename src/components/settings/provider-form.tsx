@@ -20,6 +20,7 @@ const DEFAULT_BASE_URLS: Record<Protocol, string> = {
   "ucloud-seedance": "https://api.modelverse.cn",
   kling: "https://api.klingai.com",
   wan: "https://dashscope.aliyuncs.com/api/v1",
+  wuyin: "https://api.wuyinkeji.com",
 };
 
 function getProtocolOptions(capability: Capability): { value: Protocol; label: string }[] {
@@ -34,6 +35,7 @@ function getProtocolOptions(capability: Capability): { value: Protocol; label: s
       { value: "openai", label: "OpenAI" },
       { value: "gemini", label: "Gemini" },
       { value: "kling", label: "Kling" },
+      { value: "wuyin", label: "Wuyin" },
     ];
   }
   // video

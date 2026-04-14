@@ -48,7 +48,7 @@ export function buildShotSplitSystem(maxDuration: number): string {
         "soundDesign": "该镜头的环境音/氛围音效",
         "musicCue": "该镜头的音乐指示",
         "characters": ["出现在该镜头中的准确角色名"],
-        "transitionIn": "cut",
+        "transitionIn": "dissolve",
         "transitionOut": "cut",
         "referenceImagePrompts": ["参考图 1 的生成描述", "参考图 2 的描述"]
       }
@@ -222,6 +222,8 @@ ${proportionalTiers}
 - 戏剧性时间跳跃或蒙太奇：使用 "wipeleft" 或 "circleopen"
 - 不确定时，默认使用 "cut"
 - 不要过度使用花哨转场——大多数镜头应使用 "cut"
+- 禁止整段输出全部为 "cut"：每次发生场景切换或明确时间跳跃时，必须至少使用一次非 "cut" 转场
+- 被拆分成连续小镜头的同一动作链（镜头严格承接上一个尾帧）必须使用 "cut"
 
 关键语言规则：所有文本字段（sceneTitle、sceneDescription、lighting、colorPalette、startFrame、endFrame、motionScript、dialogues.text、dialogues.character）必须与剧本使用相同语言。如果剧本是中文，则所有字段均使用中文。仅 "cameraDirection" 使用英文（技术术语）。
 

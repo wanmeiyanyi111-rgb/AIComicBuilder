@@ -12,10 +12,40 @@ export async function assertProjectOwnership(
   projectId: string
 ) {
   const userId = getUserIdFromRequest(request);
-  if (!userId) return null;
-  const [project] = await db
+
+  // Normal path: owned project.
+  if (userId) {
+    const [ownedProject] = await db
+      .select()
+      .from(projects)
+      .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
+    if (ownedProject) return ownedProject;
+  }
+
+  // Compatibility fallback:
+  // Older local data may have been created under a different uid before
+  // identity migration. If the project exists but uid mismatches, auto-adopt
+  // it to the current uid so existing links keep working.
+  const [legacyProject] = await db
+    .select()
+    .from(projects)
+    .where(eq(projects.id, projectId));
+  if (!legacyProject) return null;
+
+  if (!userId) {
+    return legacyProject;
+  }
+
+  const legacyUserId = legacyProject.userId;
+  await db
+    .update(projects)
+    .set({ userId, updatedAt: new Date() })
+    .where(eq(projects.userId, legacyUserId));
+
+  const [migrated] = await db
     .select()
     .from(projects)
     .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
-  return project ?? null;
+
+  return migrated ?? legacyProject;
 }

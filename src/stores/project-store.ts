@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { apiFetch } from "@/lib/api-fetch";
+import { ApiError, apiFetch } from "@/lib/api-fetch";
 
 interface Character {
   id: string;
@@ -71,6 +71,12 @@ export interface Shot {
   qualityScore?: number;
   qualityIssues?: string[];
   isStale?: boolean;
+  chainGroupId?: string | null;
+  chainIndex?: number;
+  chainTotal?: number;
+  prevShotId?: string | null;
+  inheritPrevLastFrame?: number;
+  originalDuration?: number;
   status: string;
   dialogues: Dialogue[];
   /** Active shot_assets rows for this shot, all types mixed. */
@@ -194,10 +200,13 @@ export type StoryboardVersion = {
 
 interface Project {
   id: string;
+  styleId?: string;
   title: string;
   idea: string;
   script: string;
   outline?: string;
+  worldSetting?: string;
+  colorPalette?: string;
   status: string;
   finalVideoUrl: string | null;
   generationMode: "keyframe" | "reference";
@@ -209,6 +218,7 @@ interface Project {
 interface ProjectStore {
   project: Project | null;
   loading: boolean;
+  fetchError: string | null;
   currentEpisodeId: string | null;
   fetchProject: (id: string, episodeId?: string, versionId?: string) => Promise<void>;
   updateIdea: (idea: string) => void;
@@ -219,6 +229,7 @@ interface ProjectStore {
 export const useProjectStore = create<ProjectStore>((set, get) => ({
   project: null,
   loading: false,
+  fetchError: null,
   currentEpisodeId: null,
 
   fetchProject: async (id: string, episodeId?: string, versionId?: string) => {
@@ -233,9 +244,30 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       url = `/api/projects/${id}${versionId ? `?versionId=${versionId}` : ""}`;
     }
 
-    const res = await apiFetch(url);
-    const data = await res.json();
-    set({ project: data, loading: false, currentEpisodeId: episodeId ?? null });
+    try {
+      const res = await apiFetch(url);
+      const data = await res.json();
+      set({
+        project: data,
+        loading: false,
+        fetchError: null,
+        currentEpisodeId: episodeId ?? null,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof ApiError && err.status === 404) {
+        // Keep the app interactive instead of crashing the whole route.
+        set({
+          project: null,
+          loading: false,
+          fetchError: "not_found",
+          currentEpisodeId: null,
+        });
+        return;
+      }
+      set({ loading: false, fetchError: message });
+      throw err;
+    }
   },
 
   updateIdea: (idea: string) => {
@@ -251,6 +283,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   },
 
   setProject: (project: Project) => {
-    set({ project });
+    set({ project, fetchError: null });
   },
 }));

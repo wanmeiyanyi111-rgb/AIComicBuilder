@@ -2,7 +2,18 @@
 
 import Link from "next/link";
 import { useLocale, useTranslations } from "next-intl";
-import { MoreHorizontal, Pencil, Trash2, Film, Clock, Play, Check } from "lucide-react";
+import {
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+  Film,
+  Clock,
+  Play,
+  Check,
+  Users,
+  Landmark,
+  Package,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Episode } from "@/stores/episode-store";
 import { uploadUrl } from "@/lib/utils/upload-url";
@@ -61,6 +72,9 @@ export function EpisodeCard({
   const keywordList = episode.keywords
     ? episode.keywords.split(/[,，]/).map((k) => k.trim()).filter(Boolean)
     : [];
+  const episodeCharacters = episode.characters ?? [];
+  const episodeScenes = episode.scenes ?? [];
+  const episodeProps = episode.props ?? [];
 
   const handlePlayClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -239,6 +253,75 @@ export function EpisodeCard({
           ))}
           {keywordList.length > 5 && (
             <span className="text-[10px] text-[--text-muted]">+{keywordList.length - 5}</span>
+          )}
+        </div>
+      )}
+
+      {(episodeCharacters.length > 0 ||
+        episodeScenes.length > 0 ||
+        episodeProps.length > 0) && (
+        <div className="mt-2.5 space-y-1.5">
+          {episodeCharacters.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Users className="h-3 w-3 text-blue-500" />
+              <div className="flex flex-wrap gap-1">
+                {episodeCharacters.slice(0, 4).map((name) => (
+                  <span
+                    key={name}
+                    className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600"
+                  >
+                    {name}
+                  </span>
+                ))}
+                {episodeCharacters.length > 4 && (
+                  <span className="text-[10px] text-[--text-muted]">
+                    +{episodeCharacters.length - 4}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {episodeScenes.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Landmark className="h-3 w-3 text-emerald-500" />
+              <div className="flex flex-wrap gap-1">
+                {episodeScenes.slice(0, 3).map((name) => (
+                  <span
+                    key={name}
+                    className="rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600"
+                  >
+                    {name}
+                  </span>
+                ))}
+                {episodeScenes.length > 3 && (
+                  <span className="text-[10px] text-[--text-muted]">
+                    +{episodeScenes.length - 3}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          {episodeProps.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <Package className="h-3 w-3 text-amber-600" />
+              <div className="flex flex-wrap gap-1">
+                {episodeProps.slice(0, 3).map((name) => (
+                  <span
+                    key={name}
+                    className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                  >
+                    {name}
+                  </span>
+                ))}
+                {episodeProps.length > 3 && (
+                  <span className="text-[10px] text-[--text-muted]">
+                    +{episodeProps.length - 3}
+                  </span>
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}

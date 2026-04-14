@@ -210,6 +210,15 @@ export function ShotCard({
       ? "generating"
       : videoUrl ? "completed" : "pending"
     : shot.status;
+  const chainIndex = shot.chainIndex ?? 1;
+  const chainTotal = shot.chainTotal ?? 1;
+  const isSegmentedChain = chainTotal > 1;
+  const hasTailFrameContinuity =
+    isSegmentedChain && shot.inheritPrevLastFrame === 1 && !!shot.prevShotId;
+  const originalDuration = shot.originalDuration ?? 0;
+  const showOriginalDuration = isSegmentedChain && originalDuration > 0;
+  const durationMin = isSegmentedChain ? 3 : 5;
+  const durationMax = isSegmentedChain ? 5 : 15;
   const t = useTranslations();
   const getModelConfig = useModelStore((s) => s.getModelConfig);
 
@@ -772,7 +781,21 @@ export function ShotCard({
           })}
         </div>
         {/* Scene text */}
-        <p className="flex-1 truncate text-xs text-[--text-secondary]">{prompt}</p>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-xs text-[--text-secondary]">{prompt}</p>
+          {isSegmentedChain && (
+            <div className="mt-0.5 flex items-center gap-1">
+              <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700">
+                {t("storyboard.segmentBadge", { index: chainIndex, total: chainTotal })}
+              </span>
+              {hasTailFrameContinuity && (
+                <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                  {t("storyboard.tailFrameLinkBadge")}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
         {/* Progress dots */}
         <div className="flex items-center gap-1">
           {[hasText, hasFrame, hasVideoPrompt, hasVideo].map((done, i) => (
@@ -842,14 +865,14 @@ export function ShotCard({
             {/* Duration */}
             <span className="flex items-center gap-1 text-xs text-[--text-muted]">
               <Clock className="h-3 w-3" />
-              <input
-                type="number"
-                min={5}
-                max={15}
-                value={editDuration}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => {
-                  const v = Math.min(15, Math.max(5, Number(e.target.value)));
+                <input
+                  type="number"
+                  min={durationMin}
+                  max={durationMax}
+                  value={editDuration}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={(e) => {
+                  const v = Math.min(durationMax, Math.max(durationMin, Number(e.target.value)));
                   setEditDuration(v);
                   patchShot({ duration: v });
                 }}
@@ -870,6 +893,23 @@ export function ShotCard({
               ))}
             </div>
           </div>
+          {isSegmentedChain && (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5">
+              <span className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">
+                {t("storyboard.segmentBadge", { index: chainIndex, total: chainTotal })}
+              </span>
+              {hasTailFrameContinuity && (
+                <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                  {t("storyboard.tailFrameLinkBadge")}
+                </span>
+              )}
+              {showOriginalDuration && (
+                <span className="inline-flex items-center rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+                  {t("storyboard.originalDurationBadge", { seconds: originalDuration })}
+                </span>
+              )}
+            </div>
+          )}
           <div className="mt-1 flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-2 text-xs">
               <span className="text-[--text-muted] shrink-0">{t("shot.transition")}:</span>

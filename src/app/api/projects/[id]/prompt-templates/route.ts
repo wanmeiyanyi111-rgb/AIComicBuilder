@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { promptTemplates, projects } from "@/lib/db/schema";
+import { promptTemplates } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 
 // GET: list all project-level overrides for user and project
 export async function GET(
@@ -10,17 +10,12 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const userId = getUserIdFromRequest(request);
-
-  // Verify project ownership
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, id), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(request, id);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  const userId = project.userId;
 
   const templates = await db
     .select()

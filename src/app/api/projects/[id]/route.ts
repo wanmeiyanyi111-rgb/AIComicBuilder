@@ -2,24 +2,19 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { projects, episodes, characters, shots, dialogues, storyboardVersions } from "@/lib/db/schema";
 import { eq, asc, and, desc } from "drizzle-orm";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { markDownstreamStale } from "@/lib/staleness";
-
-async function resolveProject(id: string, userId: string) {
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, id), eq(projects.userId, userId)));
-  return project ?? null;
-}
+import {
+  resolveProjectStyle,
+  resolveProjectStyleFromSource,
+} from "@/lib/project-style";
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const userId = getUserIdFromRequest(request);
-  const project = await resolveProject(id, userId);
+  const project = await assertProjectOwnership(request, id);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -110,8 +105,15 @@ export async function GET(
     .where(eq(episodes.projectId, id))
     .orderBy(asc(episodes.sequence));
 
+  const normalizedStyle = resolveProjectStyleFromSource({
+    styleId: project.styleId,
+    worldSetting: project.worldSetting,
+    colorPalette: project.colorPalette,
+  });
+
   return NextResponse.json({
     ...project,
+    styleId: normalizedStyle.styleId,
     episodes: projectEpisodes,
     characters: projectCharacters,
     shots: enrichedShots,
@@ -129,8 +131,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const userId = getUserIdFromRequest(request);
-  const project = await resolveProject(id, userId);
+  const project = await assertProjectOwnership(request, id);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -144,13 +145,32 @@ export async function PATCH(
     status: "draft" | "processing" | "completed";
     generationMode: "keyframe" | "reference";
     useProjectPrompts: number;
+    styleId: string;
     colorPalette: string;
     worldSetting: string;
+    applyStyleToEpisodes: boolean;
     targetDuration: number;
     bgmUrl: string;
   }>;
 
-  const { title, idea, script, outline, status, generationMode, useProjectPrompts, colorPalette, worldSetting, targetDuration, bgmUrl } = body;
+  const {
+    title,
+    idea,
+    script,
+    outline,
+    status,
+    generationMode,
+    useProjectPrompts,
+    styleId: styleIdInput,
+    colorPalette,
+    worldSetting,
+    applyStyleToEpisodes,
+    targetDuration,
+    bgmUrl,
+  } = body;
+
+  const styleResolved =
+    styleIdInput !== undefined ? resolveProjectStyle(styleIdInput) : null;
 
   const [updated] = await db
     .update(projects)
@@ -162,8 +182,11 @@ export async function PATCH(
       ...(status !== undefined && { status }),
       ...(generationMode !== undefined && { generationMode }),
       ...(useProjectPrompts !== undefined && { useProjectPrompts }),
-      ...(colorPalette !== undefined && { colorPalette }),
-      ...(worldSetting !== undefined && { worldSetting }),
+      ...(styleResolved && { styleId: styleResolved.styleId }),
+      ...(styleResolved && { colorPalette: styleResolved.preset.colorPalette }),
+      ...(styleResolved && { worldSetting: styleResolved.preset.worldSetting }),
+      ...(styleResolved === null && colorPalette !== undefined && { colorPalette }),
+      ...(styleResolved === null && worldSetting !== undefined && { worldSetting }),
       ...(targetDuration !== undefined && { targetDuration }),
       ...(bgmUrl !== undefined && { bgmUrl }),
       updatedAt: new Date(),
@@ -171,11 +194,30 @@ export async function PATCH(
     .where(eq(projects.id, id))
     .returning();
 
+  if (styleResolved && applyStyleToEpisodes) {
+    await db
+      .update(episodes)
+      .set({
+        colorPalette: styleResolved.preset.colorPalette,
+        updatedAt: new Date(),
+      })
+      .where(eq(episodes.projectId, id));
+  }
+
   if (script !== undefined) {
     await markDownstreamStale("project", id);
   }
 
-  return NextResponse.json(updated);
+  const normalizedStyle = resolveProjectStyleFromSource({
+    styleId: updated.styleId,
+    worldSetting: updated.worldSetting,
+    colorPalette: updated.colorPalette,
+  });
+
+  return NextResponse.json({
+    ...updated,
+    styleId: normalizedStyle.styleId,
+  });
 }
 
 export async function DELETE(
@@ -183,8 +225,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const userId = getUserIdFromRequest(request);
-  const project = await resolveProject(id, userId);
+  const project = await assertProjectOwnership(request, id);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

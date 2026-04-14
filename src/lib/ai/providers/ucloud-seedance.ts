@@ -39,11 +39,13 @@ export class UCloudSeedanceProvider implements VideoProvider {
   private baseUrl: string;
   private model: string;
   private uploadDir: string;
+  private resolution: string;
 
   constructor(params?: {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
+    resolution?: string;
     uploadDir?: string;
   }) {
     this.apiKey = params?.apiKey || "";
@@ -51,6 +53,11 @@ export class UCloudSeedanceProvider implements VideoProvider {
       params?.baseUrl || "https://api.modelverse.cn"
     ).replace(/\/+$/, "");
     this.model = params?.model || "doubao-seedance-1-5-pro-251215";
+    this.resolution =
+      params?.resolution ||
+      process.env.SEEDANCE_RESOLUTION ||
+      process.env.UCLOUD_SEEDANCE_RESOLUTION ||
+      "480p";
     this.uploadDir = params?.uploadDir || process.env.UPLOAD_DIR || "./uploads";
   }
 
@@ -123,7 +130,7 @@ export class UCloudSeedanceProvider implements VideoProvider {
       parameters: {
         duration: params.duration || 5,
         ratio: params.ratio || "16:9",
-        resolution: "720p",
+        resolution: this.resolution,
         watermark: false,
         ...(isSeedance2 && { generate_audio: true }),
       },
@@ -168,7 +175,7 @@ export class UCloudSeedanceProvider implements VideoProvider {
       parameters: {
         duration: params.duration || 5,
         ratio: params.ratio || "16:9",
-        resolution: "720p",
+        resolution: this.resolution,
         watermark: false,
         ...(isSeedance2 && { generate_audio: true }),
       },

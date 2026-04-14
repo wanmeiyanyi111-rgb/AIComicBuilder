@@ -24,6 +24,23 @@
     "title": "マイプロジェクト",
     "newProject": "新規プロジェクト",
     "noProjects": "まだプロジェクトがありません。上のボタンをクリックして作成しましょう。",
+    "styleLabel": "プロジェクトスタイル",
+    "styleHelp": "このプロジェクト内の全エピソードに同じスタイルが適用されます。",
+    "transitionProfileLabel": "ショット遷移スタイル",
+    "transitionProfileHelp": "分鏡の遷移リズムを調整します。最終結果は AI とルールで決定されます。",
+    "transitionProfileOptions": {
+      "balanced": "バランス",
+      "cinematic": "シネマティック",
+      "dynamic": "ダイナミック",
+      "smooth": "スムーズ"
+    },
+    "styleOptions": {
+      "cinematic_realism": "シネマティック（写実）",
+      "anime_dynamic": "ダイナミックアニメ",
+      "ink_wash": "水墨画風",
+      "film_noir": "フィルムノワール",
+      "cyberpunk_neon": "サイバーパンク・ネオン"
+    },
     "deleteConfirmTitle": "プロジェクトを削除",
     "deleteConfirmDesc": "「{title}」を削除してもよろしいですか？この操作は取り消せません。関連するすべてのデータが完全に削除されます。",
     "projectStatus": {
@@ -95,7 +112,11 @@
     "kanbanBatchGenerate": "一括生成 ({count})",
     "continueFromPrev": "前話から続ける",
     "continueFromPrevTooltip": "前話の最後のフレームを最初のフレームとして使用",
-    "prevEpisodeNoFrames": "前話のフレームが未生成です"
+    "prevEpisodeNoFrames": "前話のフレームが未生成です",
+    "styleApplyAllEpisodes": "保存して全エピソードに同期",
+    "styleApplying": "同期中...",
+    "styleApplySuccess": "プロジェクトスタイルを更新し、全エピソードに同期しました",
+    "styleApplyError": "プロジェクトスタイルの更新に失敗しました"
   },
   "character": {
     "name": "キャラクター名",
@@ -125,6 +146,31 @@
     "relType_rival": "ライバル",
     "relType_stranger": "他人",
     "relType_neutral": "中立"
+  },
+  "visualAsset": {
+    "title": "シーン・小道具",
+    "subtitle": "プロジェクトのスタイル制約を適用して、シーン画像と小道具画像を個別生成します。",
+    "sceneTitle": "シーン画像",
+    "propTitle": "小道具画像",
+    "sceneHint": "自動制約: シーン画像にキャラクターや人物シルエットを含めません。",
+    "propHint": "自動制約: 単一小道具・純白背景・人体要素なし。",
+    "addScene": "シーン追加",
+    "addProp": "小道具追加",
+    "extractCandidates": "候補を自動抽出",
+    "extractingCandidates": "抽出中...",
+    "extractSuccess": "候補を {count} 件追加しました（シーン {scenes} / 小道具 {props}）",
+    "extractNoNew": "新規追加できる候補はありませんでした",
+    "batchGenerate": "一括生成",
+    "generate": "画像生成",
+    "noImage": "画像なし",
+    "noScene": "シーン素材がありません。「シーン追加」から開始してください。",
+    "noProp": "小道具素材がありません。「小道具追加」から開始してください。",
+    "sceneName": "シーン名",
+    "propName": "小道具名",
+    "scenePrompt": "環境・光・雰囲気・質感を入力...",
+    "propPrompt": "素材・形状・ディテールを入力...",
+    "defaultSceneName": "新しいシーン",
+    "defaultPropName": "新しい小道具"
   },
   "shot": {
     "sequence": "ショット {number}",
@@ -192,7 +238,20 @@
     "generateRefPrompts": "参考画像プロンプト生成",
     "batchGenerateRefImages": "参考画像を一括生成",
     "needTwoVersions": "比較には2つ以上のバージョンが必要です",
-    "noFrame": "フレームなし"
+    "noFrame": "フレームなし",
+    "replanLongShots": "長尺ショットを再計画",
+    "replanLongShotsPreview": "再計画の見積もり",
+    "replanLongShotsPreviewHelp": "DBへ書き込まずに分割結果を見積もります",
+    "replanLongShotsPreviewRunning": "見積もり中...",
+    "replanLongShotsHelp": "5秒を超えるショットを 3-5 秒のセグメントに自動分割します",
+    "replanLongShotsRunning": "再計画中...",
+    "replanLongShotsSuccess": "長尺ショット {split} 件を再計画し、{added} セグメントを追加しました",
+    "replanLongShotsDryRunSummary": "見積もり完了: ショット数 {before} → {after}、長尺 {split} 件を分割、{added} セグメント追加予定",
+    "replanLongShotsError": "長尺ショットの再計画に失敗しました",
+    "noLongShotsToReplan": "5秒を超えるショットはありません",
+    "segmentBadge": "セグメント {index}/{total}",
+    "tailFrameLinkBadge": "末尾フレーム接続",
+    "originalDurationBadge": "元の尺 {seconds}秒"
   },
   "episode": {
     "title": "エピソード管理",
@@ -256,6 +315,7 @@
     "importStep": {
       "parse": "テキスト解析",
       "characters": "キャラクター抽出",
+      "sceneProps": "シーン/小道具抽出",
       "split": "自動分割",
       "generate": "エピソード作成"
     }
@@ -319,6 +379,12 @@
       "characterExtract": "キャラクター抽出",
       "importCharacterExtract": "インポートキャラクター抽出",
       "characterImage": "キャラクターデザインシート",
+      "scenePropExtract": "シーン/小道具抽出",
+      "scenePropExtractDesc": "脚本からシーン候補と小道具候補を抽出し、生図用プロンプトを生成",
+      "sceneImage": "シーン設計図",
+      "sceneImageDesc": "シーン単独生成用プロンプトテンプレート（人物禁止）",
+      "propImage": "小道具設計図",
+      "propImageDesc": "小道具単独生成用プロンプトテンプレート（単体・白背景）",
       "shotSplit": "ショット分解",
       "frameGenerateFirst": "最初のフレーム",
       "frameGenerateLast": "最後のフレーム",
@@ -368,7 +434,11 @@
       "useProjectPromptsDesc": "無効時はグローバルデフォルトを使用。有効にするとこのプロジェクト用にカスタマイズできます。",
       "customize": "カスタマイズ",
       "useGlobal": "グローバルを使用",
-      "modifiedCount": "{count} 件変更済み"
+      "modifiedCount": "{count} 件変更済み",
+      "styleApplyAllEpisodes": "保存して全エピソードに同期",
+      "styleApplying": "同期中...",
+      "styleApplySuccess": "プロジェクトスタイルを更新し、全エピソードに同期しました",
+      "styleApplyError": "プロジェクトスタイルの更新に失敗しました"
     },
     "presets": {
       "title": "プリセットテンプレート",
@@ -490,7 +560,9 @@
       "rules": "ルール",
       "rulesDesc": "本プロンプトのコアルールセット",
       "durationStrategy": "尺戦略",
-      "durationStrategyDesc": "ショット尺に応じた記述粒度のルール"
+      "durationStrategyDesc": "ショット尺に応じた記述粒度のルール",
+      "transitionProfileId": "遷移プリセット",
+      "transitionProfileIdDesc": "ショット遷移ポリシーのプリセット ID（balanced / cinematic / dynamic / smooth）"
     }
   }
 }

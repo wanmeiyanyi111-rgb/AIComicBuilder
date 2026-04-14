@@ -24,6 +24,23 @@
     "title": "我的项目",
     "newProject": "新建项目",
     "noProjects": "还没有项目，点击上方按钮创建一个吧",
+    "styleLabel": "项目风格",
+    "styleHelp": "该项目下所有分集会继承此风格。",
+    "transitionProfileLabel": "镜头转场风格",
+    "transitionProfileHelp": "控制分镜默认转场节奏，最终仍由 AI + 规则共同决定。",
+    "transitionProfileOptions": {
+      "balanced": "均衡默认",
+      "cinematic": "电影叙事",
+      "dynamic": "高动势",
+      "smooth": "平滑连贯"
+    },
+    "styleOptions": {
+      "cinematic_realism": "电影写实",
+      "anime_dynamic": "高动势动画",
+      "ink_wash": "东方水墨",
+      "film_noir": "黑色电影",
+      "cyberpunk_neon": "赛博霓虹"
+    },
     "deleteConfirmTitle": "删除项目",
     "deleteConfirmDesc": "确定要删除「{title}」吗？此操作不可撤销，所有相关数据将被永久删除。",
     "projectStatus": {
@@ -96,7 +113,11 @@
     "kanbanBatchGenerate": "批量生成 ({count})",
     "continueFromPrev": "续上集",
     "continueFromPrevTooltip": "使用上一集最后一帧作为本集首帧",
-    "prevEpisodeNoFrames": "上一集尚未生成帧，无法续接"
+    "prevEpisodeNoFrames": "上一集尚未生成帧，无法续接",
+    "styleApplyAllEpisodes": "保存并同步全部分集",
+    "styleApplying": "同步中...",
+    "styleApplySuccess": "项目风格已更新，并同步到全部分集",
+    "styleApplyError": "更新项目风格失败"
   },
   "character": {
     "name": "角色名",
@@ -126,6 +147,31 @@
     "relType_rival": "竞争",
     "relType_stranger": "陌生",
     "relType_neutral": "中立"
+  },
+  "visualAsset": {
+    "title": "场景与道具",
+    "subtitle": "独立生成场景图与道具图，自动套用项目风格约束。",
+    "sceneTitle": "场景图",
+    "propTitle": "道具图",
+    "sceneHint": "自动约束：场景里不能出现任何角色形象或人物轮廓。",
+    "propHint": "自动约束：道具单体、纯白背景、不能出现人物肢体。",
+    "addScene": "新增场景",
+    "addProp": "新增道具",
+    "extractCandidates": "自动提取候选词",
+    "extractingCandidates": "提取中...",
+    "extractSuccess": "已新增 {count} 条候选词（场景 {scenes} / 道具 {props}）",
+    "extractNoNew": "没有新的候选词可新增",
+    "batchGenerate": "批量生图",
+    "generate": "生成图片",
+    "noImage": "暂无图片",
+    "noScene": "暂无场景素材，点击“新增场景”开始。",
+    "noProp": "暂无道具素材，点击“新增道具”开始。",
+    "sceneName": "场景名称",
+    "propName": "道具名称",
+    "scenePrompt": "输入场景提示词（环境、光线、氛围、材质）",
+    "propPrompt": "输入道具提示词（材质、结构、细节）",
+    "defaultSceneName": "新场景",
+    "defaultPropName": "新道具"
   },
   "shot": {
     "sequence": "第 {number} 个分镜",
@@ -194,7 +240,20 @@
     "generateRefPrompts": "生成参考图提示词",
     "batchGenerateRefImages": "批量生成参考图",
     "needTwoVersions": "至少需要2个版本才能对比",
-    "noFrame": "暂无画面"
+    "noFrame": "暂无画面",
+    "replanLongShots": "重规划长分镜",
+    "replanLongShotsPreview": "预估拆分结果",
+    "replanLongShotsPreviewHelp": "仅预估拆分结果，不写入数据库",
+    "replanLongShotsPreviewRunning": "预估中...",
+    "replanLongShotsHelp": "将当前版本中超过 5 秒的镜头自动拆分为 3-5 秒段落",
+    "replanLongShotsRunning": "重规划中...",
+    "replanLongShotsSuccess": "已重规划 {split} 个长镜头，新增 {added} 段",
+    "replanLongShotsDryRunSummary": "预估完成：镜头数 {before} → {after}，将拆分 {split} 个长镜头，新增 {added} 段",
+    "replanLongShotsError": "重规划长分镜失败",
+    "noLongShotsToReplan": "当前没有超过 5 秒的长分镜",
+    "segmentBadge": "分段 {index}/{total}",
+    "tailFrameLinkBadge": "尾帧衔接",
+    "originalDurationBadge": "原时长 {seconds}s"
   },
   "episode": {
     "title": "分集管理",
@@ -258,6 +317,7 @@
     "importStep": {
       "parse": "文本解析",
       "characters": "角色提取",
+      "sceneProps": "场景/道具提取",
       "split": "自动分集",
       "generate": "创建分集"
     }
@@ -321,6 +381,12 @@
       "characterExtract": "角色提取",
       "importCharacterExtract": "导入角色提取",
       "characterImage": "角色设计图",
+      "scenePropExtract": "场景/道具提取",
+      "scenePropExtractDesc": "从剧本提取可直接生图的场景与道具候选词",
+      "sceneImage": "场景设计图",
+      "sceneImageDesc": "场景单独生图提示词模板（禁止角色入镜）",
+      "propImage": "道具设计图",
+      "propImageDesc": "道具单独生图提示词模板（单体白底）",
       "shotSplit": "分镜拆分",
       "frameGenerateFirst": "首帧生成",
       "frameGenerateLast": "尾帧生成",
@@ -370,7 +436,11 @@
       "useProjectPromptsDesc": "关闭时使用全局默认配置，开启后可针对此项目自定义",
       "customize": "自定义",
       "useGlobal": "用全局",
-      "modifiedCount": "{count} 个已修改"
+      "modifiedCount": "{count} 个已修改",
+      "styleApplyAllEpisodes": "保存并同步全部分集",
+      "styleApplying": "同步中...",
+      "styleApplySuccess": "项目风格已更新，并同步到全部分集",
+      "styleApplyError": "更新项目风格失败"
     },
     "presets": {
       "title": "预设模板",
@@ -492,7 +562,9 @@
       "rules": "规则",
       "rulesDesc": "本提示词的核心规则集",
       "durationStrategy": "时长策略",
-      "durationStrategyDesc": "按镜头时长分级的描述颗粒度规则"
+      "durationStrategyDesc": "按镜头时长分级的描述颗粒度规则",
+      "transitionProfileId": "转场风格预设",
+      "transitionProfileIdDesc": "镜头转场策略预设 ID（balanced / cinematic / dynamic / smooth）"
     }
   }
 }

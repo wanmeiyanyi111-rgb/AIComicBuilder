@@ -16,6 +16,16 @@ import { useRouter } from "next/navigation";
 import { useLocale } from "next-intl";
 import { Plus, Loader2, Sparkles } from "lucide-react";
 import { apiFetch } from "@/lib/api-fetch";
+import {
+  DEFAULT_PROJECT_STYLE,
+  PROJECT_STYLE_IDS,
+  type ProjectStyleId,
+} from "@/lib/project-style";
+import {
+  DEFAULT_SHOT_TRANSITION_PROFILE,
+  SHOT_TRANSITION_PROFILE_IDS,
+  type ShotTransitionProfileId,
+} from "@/lib/shot-transition-profile";
 
 export function CreateProjectDialog() {
   const t = useTranslations();
@@ -23,6 +33,9 @@ export function CreateProjectDialog() {
   const locale = useLocale();
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
+  const [styleId, setStyleId] = useState<ProjectStyleId>(DEFAULT_PROJECT_STYLE);
+  const [transitionProfileId, setTransitionProfileId] =
+    useState<ShotTransitionProfileId>(DEFAULT_SHOT_TRANSITION_PROFILE);
   const [loading, setLoading] = useState(false);
 
   async function handleCreate() {
@@ -32,12 +45,27 @@ export function CreateProjectDialog() {
     const res = await apiFetch("/api/projects", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, styleId }),
     });
 
     const project = await res.json();
+    try {
+      await apiFetch(`/api/projects/${project.id}/prompt-templates/shot_split`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "slots",
+          slots: { transition_profile_id: transitionProfileId },
+        }),
+      });
+    } catch (err) {
+      console.warn("[CreateProject] Failed to save transition profile:", err);
+    }
+
     setOpen(false);
     setTitle("");
+    setStyleId(DEFAULT_PROJECT_STYLE);
+    setTransitionProfileId(DEFAULT_SHOT_TRANSITION_PROFILE);
     setLoading(false);
     router.push(`/${locale}/project/${project.id}/script`);
   }
@@ -72,6 +100,44 @@ export function CreateProjectDialog() {
               }}
               autoFocus
             />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="project-style">{t("dashboard.styleLabel")}</Label>
+            <select
+              id="project-style"
+              value={styleId}
+              onChange={(e) => setStyleId(e.target.value as ProjectStyleId)}
+              className="w-full rounded-md border border-[--border-subtle] bg-white px-3 py-2 text-sm text-[--text-primary] outline-none focus:border-primary"
+            >
+              {PROJECT_STYLE_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {t(`dashboard.styleOptions.${id}`)}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-[--text-muted]">{t("dashboard.styleHelp")}</p>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="transition-profile">
+              {t("dashboard.transitionProfileLabel")}
+            </Label>
+            <select
+              id="transition-profile"
+              value={transitionProfileId}
+              onChange={(e) =>
+                setTransitionProfileId(e.target.value as ShotTransitionProfileId)
+              }
+              className="w-full rounded-md border border-[--border-subtle] bg-white px-3 py-2 text-sm text-[--text-primary] outline-none focus:border-primary"
+            >
+              {SHOT_TRANSITION_PROFILE_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {t(`dashboard.transitionProfileOptions.${id}`)}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-[--text-muted]">
+              {t("dashboard.transitionProfileHelp")}
+            </p>
           </div>
           <Button
             onClick={handleCreate}

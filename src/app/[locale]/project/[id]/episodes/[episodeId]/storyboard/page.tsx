@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { InlineModelPicker } from "@/components/editor/model-selector";
 import { VideoRatioPicker } from "@/components/editor/video-ratio-picker";
-import { apiFetch } from "@/lib/api-fetch";
+import { ApiError, apiFetch } from "@/lib/api-fetch";
 import { toast } from "sonner";
 import { GenerationModeTab } from "@/components/editor/generation-mode-tab";
 import { ShotDrawer } from "@/components/editor/shot-drawer";
@@ -71,12 +71,18 @@ export default function EpisodeStoryboardPage() {
   const [batchProgress, setBatchProgress] = useState<{
     total: number;
     completed: number;
+    inProgress?: number;
     failed: string[]; // shot IDs that failed
+    targetShotIds?: string[];
+    action?: string;
   } | null>(null);
   const [lastFailedShots, setLastFailedShots] = useState<string[]>([]);
   const [lastBatchAction, setLastBatchAction] = useState<string | null>(null);
   const [compareMode, setCompareMode] = useState(false);
   const [generatingRefPrompts, setGeneratingRefPrompts] = useState(false);
+  const [generatingKeyframeAssets, setGeneratingKeyframeAssets] = useState(false);
+  const [replanningLongShots, setReplanningLongShots] = useState(false);
+  const [previewingReplanLongShots, setPreviewingReplanLongShots] = useState(false);
 
   const currentEpisodeId = useProjectStore((s) => s.currentEpisodeId);
   const episodeStoreEpisodes = useEpisodeStore((s) => s.episodes);
@@ -115,13 +121,17 @@ export default function EpisodeStoryboardPage() {
     });
   }, [project?.versions]);
 
+  const shots = useMemo(() => project?.shots ?? [], [project?.shots]);
+  const projectCharacters = useMemo(
+    () => project?.characters ?? [],
+    [project?.characters]
+  );
+
   const sceneGroups = useMemo(() => {
-    if (!project) return { groups: [], ungrouped: [] };
+    const groupMap = new Map<string, { sceneId: string; shots: typeof shots }>();
+    const ungrouped: typeof shots = [];
 
-    const groupMap = new Map<string, { sceneId: string; shots: typeof project.shots }>();
-    const ungrouped: typeof project.shots = [];
-
-    for (const shot of project.shots) {
+    for (const shot of shots) {
       if (shot.sceneId) {
         const existing = groupMap.get(shot.sceneId);
         if (existing) {
@@ -138,28 +148,27 @@ export default function EpisodeStoryboardPage() {
       groups: Array.from(groupMap.values()),
       ungrouped,
     };
-  }, [project?.shots]);
+  }, [shots]);
 
-  if (!project) return null;
+  const generationMode = (project?.generationMode || "keyframe") as "keyframe" | "reference";
 
-  const totalShots = project.shots.length;
-  const shotsWithFrames = project.shots.filter((s) => hasKeyframePair(s)).length;
-  const generationMode = (project.generationMode || "keyframe") as "keyframe" | "reference";
-  const shotsWithVideo = project.shots.filter((s) =>
+  const totalShots = shots.length;
+  const shotsWithFrames = shots.filter((s) => hasKeyframePair(s)).length;
+  const shotsWithVideo = shots.filter((s) =>
     generationMode === "reference" ? getReferenceVideoUrl(s) : getKeyframeVideoUrl(s)
   ).length;
-  const shotsWithVideoPrompts = project.shots.filter((s) => s.videoPrompt).length;
-  const shotsWithSceneFrames = project.shots.filter((s) => getSceneRefFrameUrl(s)).length;
-  const shotsWithFrameAny = project.shots.filter(
+  const shotsWithVideoPrompts = shots.filter((s) => s.videoPrompt).length;
+  const shotsWithSceneFrames = shots.filter((s) => getSceneRefFrameUrl(s)).length;
+  const shotsWithFrameAny = shots.filter(
     (s) => getSceneRefFrameUrl(s) || getFirstFrameUrl(s) || getLastFrameUrl(s)
   ).length;
-  const charactersWithRefs = project.characters.filter((c) => c.referenceImage);
+  const charactersWithRefs = projectCharacters.filter((c) => c.referenceImage);
   const hasReferenceImages = charactersWithRefs.length > 0;
 
   // Check if all reference images are generated (for reference mode blocking)
   const allRefImagesGenerated = useMemo(() => {
     if (generationMode !== "reference") return true;
-    for (const shot of project.shots) {
+    for (const shot of shots) {
       const refOnly = getReferenceAssets(shot);
       if (refOnly.length === 0) continue;
       if (refOnly.some((r) => r.status !== "completed" && r.prompt)) {
@@ -167,36 +176,35 @@ export default function EpisodeStoryboardPage() {
       }
     }
     return true;
-  }, [project.shots, generationMode]);
+  }, [shots, generationMode]);
 
   const shotsWithRefPrompts = useMemo(() => {
-    if (!project) return 0;
-    return project.shots.filter((s) => {
+    return shots.filter((s) => {
       const refOnly = getReferenceAssets(s);
       return refOnly.length > 0 && refOnly.some((r) => r.prompt);
     }).length;
-  }, [project?.shots]);
+  }, [shots]);
 
   const shotsWithKeyframePrompts = useMemo(() => {
-    if (!project) return 0;
-    return project.shots.filter((s) => {
+    return shots.filter((s) => {
       const ff = getFirstFramePrompt(s);
       const lf = getLastFramePrompt(s);
       return !!ff && !!lf;
     }).length;
-  }, [project?.shots]);
+  }, [shots]);
 
   const shotsWithAllRefImages = useMemo(() => {
-    if (!project) return 0;
-    return project.shots.filter((s) => {
+    return shots.filter((s) => {
       const refOnly = getReferenceAssets(s);
       return refOnly.length > 0 && refOnly.every((r) => r.status === "completed" && r.fileUrl);
     }).length;
-  }, [project?.shots]);
+  }, [shots]);
 
   const anyGenerating = generating || generatingFrames || generatingVideos || generatingSceneFrames || generatingRefImages || generatingVideoPrompts || generatingRefPrompts;
 
-  const drawerShots = project.shots;
+  const drawerShots = shots;
+
+  if (!project) return null;
 
   async function handleGenerateShots() {
     if (!project) return;
@@ -222,13 +230,85 @@ export default function EpisodeStoryboardPage() {
         }
       }
     } catch (err) {
-      console.error("Shot split error:", err);
-      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
+      if (err instanceof ApiError) {
+        toast.error(err.message || t("common.generationFailed"));
+      } else {
+        console.error("Shot split error:", err);
+        toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
+      }
     }
 
     setGenerating(false);
     setSelectedVersionId(null);
     await fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
+  }
+
+  async function handleReplanLongShots() {
+    if (!project) return;
+    setReplanningLongShots(true);
+    try {
+      const res = await apiFetch(`/api/projects/${project.id}/shots/replan-long`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          episodeId: useProjectStore.getState().currentEpisodeId,
+          versionId: selectedVersionId ?? undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.status === "noop") {
+        toast.info(t("storyboard.noLongShotsToReplan"));
+      } else {
+        toast.success(
+          t("storyboard.replanLongShotsSuccess", {
+            split: data.splitShots ?? 0,
+            added: data.addedShots ?? 0,
+          })
+        );
+      }
+      await fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : t("storyboard.replanLongShotsError");
+      toast.error(msg);
+    } finally {
+      setReplanningLongShots(false);
+    }
+  }
+
+  async function handlePreviewReplanLongShots() {
+    if (!project) return;
+    setPreviewingReplanLongShots(true);
+    try {
+      const res = await apiFetch(`/api/projects/${project.id}/shots/replan-long`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          episodeId: useProjectStore.getState().currentEpisodeId,
+          versionId: selectedVersionId ?? undefined,
+          dryRun: true,
+        }),
+      });
+      const data = await res.json();
+      if (data.status === "noop") {
+        toast.info(t("storyboard.noLongShotsToReplan"));
+      } else {
+        toast.info(
+          t("storyboard.replanLongShotsDryRunSummary", {
+            before: data.beforeCount ?? 0,
+            after: data.afterCount ?? 0,
+            split: data.splitShots ?? 0,
+            added: data.addedShots ?? 0,
+          })
+        );
+      }
+    } catch (err) {
+      const msg =
+        err instanceof Error ? err.message : t("storyboard.replanLongShotsError");
+      toast.error(msg);
+    } finally {
+      setPreviewingReplanLongShots(false);
+    }
   }
 
   async function handleBatchGenerateFrames(overwrite = false) {
@@ -239,7 +319,14 @@ export default function EpisodeStoryboardPage() {
     setLastBatchAction("batch_frame_generate");
 
     const targets = project.shots.filter((s) => overwrite ? true : !getFirstFrameUrl(s));
-    setBatchProgress({ total: targets.length, completed: 0, failed: [] });
+    setBatchProgress({
+      total: targets.length,
+      completed: 0,
+      inProgress: 0,
+      failed: [],
+      targetShotIds: targets.map((s) => s.id),
+      action: "batch_frame_generate",
+    });
 
     try {
       const response = await apiFetch(`/api/projects/${project.id}/generate`, {
@@ -283,7 +370,14 @@ export default function EpisodeStoryboardPage() {
     setLastBatchAction("batch_video_generate");
 
     const targets = project.shots.filter((s) => overwrite ? true : !getKeyframeVideoUrl(s));
-    setBatchProgress({ total: targets.length, completed: 0, failed: [] });
+    setBatchProgress({
+      total: targets.length,
+      completed: 0,
+      inProgress: 0,
+      failed: [],
+      targetShotIds: targets.map((s) => s.id),
+      action: "batch_video_generate",
+    });
 
     try {
       const response = await apiFetch(`/api/projects/${project.id}/generate`, {
@@ -327,7 +421,14 @@ export default function EpisodeStoryboardPage() {
     setLastBatchAction("batch_scene_frame");
 
     const targets = project.shots.filter((s) => overwrite ? true : !getSceneRefFrameUrl(s));
-    setBatchProgress({ total: targets.length, completed: 0, failed: [] });
+    setBatchProgress({
+      total: targets.length,
+      completed: 0,
+      inProgress: 0,
+      failed: [],
+      targetShotIds: targets.map((s) => s.id),
+      action: "batch_scene_frame",
+    });
 
     try {
       const response = await apiFetch(`/api/projects/${project.id}/generate`, {
@@ -392,7 +493,6 @@ export default function EpisodeStoryboardPage() {
 
   // Synchronous batch generator for keyframe (first/last frame) image prompts.
   // Mirrors handleGenerateRefPrompts — single LLM call, returns immediately.
-  const [generatingKeyframeAssets, setGeneratingKeyframeAssets] = useState(false);
 
   async function handleGenerateKeyframeAssets() {
     if (!project) return;
@@ -440,10 +540,12 @@ export default function EpisodeStoryboardPage() {
       });
 
       if (!resp.ok) throw new Error("Failed");
-      const data = await resp.json();
+      const data = await resp.json() as {
+        results?: Array<{ generated?: number; failed?: number }>;
+      };
 
-      const totalGenerated = data.results?.reduce((sum: number, r: any) => sum + (r.generated || 0), 0) || 0;
-      const totalFailed = data.results?.reduce((sum: number, r: any) => sum + (r.failed || 0), 0) || 0;
+      const totalGenerated = data.results?.reduce((sum, r) => sum + (r.generated || 0), 0) || 0;
+      const totalFailed = data.results?.reduce((sum, r) => sum + (r.failed || 0), 0) || 0;
 
       if (totalFailed > 0) {
         toast.error(`${totalFailed} reference images failed`);
@@ -467,7 +569,14 @@ export default function EpisodeStoryboardPage() {
     setLastBatchAction("batch_video_prompt");
 
     const targets = project.shots.filter((s) => !s.videoPrompt);
-    setBatchProgress({ total: targets.length, completed: 0, failed: [] });
+    setBatchProgress({
+      total: targets.length,
+      completed: 0,
+      inProgress: 0,
+      failed: [],
+      targetShotIds: targets.map((s) => s.id),
+      action: "batch_video_prompt",
+    });
 
     try {
       const response = await apiFetch(`/api/projects/${project.id}/generate`, {
@@ -510,7 +619,14 @@ export default function EpisodeStoryboardPage() {
     setLastBatchAction("batch_reference_video");
 
     const targets = project.shots.filter((s) => overwrite ? true : !getReferenceVideoUrl(s));
-    setBatchProgress({ total: targets.length, completed: 0, failed: [] });
+    setBatchProgress({
+      total: targets.length,
+      completed: 0,
+      inProgress: 0,
+      failed: [],
+      targetShotIds: targets.map((s) => s.id),
+      action: "batch_reference_video",
+    });
 
     try {
       const response = await apiFetch(`/api/projects/${project.id}/generate`, {
@@ -641,6 +757,81 @@ export default function EpisodeStoryboardPage() {
       else await handleBatchGenerateVideos(false);
     }
   }
+
+  useEffect(() => {
+    if (!project || !batchProgress?.targetShotIds || !batchProgress.action) return;
+
+    const isActionRunning =
+      (batchProgress.action === "batch_frame_generate" && generatingFrames) ||
+      (batchProgress.action === "batch_scene_frame" && generatingSceneFrames) ||
+      (batchProgress.action === "batch_video_prompt" && generatingVideoPrompts) ||
+      (batchProgress.action === "batch_video_generate" && generatingVideos) ||
+      (batchProgress.action === "batch_reference_video" && generatingVideos);
+    if (!isActionRunning) return;
+
+    let cancelled = false;
+    let inflight = false;
+
+    const computeCompleted = (shot: typeof shots[number], action: string): boolean => {
+      if (shot.status === "completed") return true;
+      if (action === "batch_frame_generate") return hasKeyframePair(shot);
+      if (action === "batch_scene_frame") return !!getSceneRefFrameUrl(shot);
+      if (action === "batch_video_prompt") return !!shot.videoPrompt;
+      if (action === "batch_video_generate") return !!getKeyframeVideoUrl(shot);
+      if (action === "batch_reference_video") return !!getReferenceVideoUrl(shot);
+      return false;
+    };
+
+    const tick = async () => {
+      if (cancelled || inflight) return;
+      inflight = true;
+      try {
+        await fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
+        if (cancelled) return;
+        const latestShots = useProjectStore.getState().project?.shots ?? [];
+        const idSet = new Set(batchProgress.targetShotIds);
+        const targetShots = latestShots.filter((s) => idSet.has(s.id));
+        const completed = targetShots.filter((s) =>
+          computeCompleted(s, batchProgress.action!)
+        ).length;
+        const inProgress = targetShots.filter((s) => s.status === "generating").length;
+        const failed = targetShots
+          .filter((s) => s.status === "failed")
+          .map((s) => s.id);
+        setBatchProgress((prev) =>
+          prev
+            ? {
+                ...prev,
+                completed: Math.min(prev.total, completed),
+                inProgress,
+                failed,
+              }
+            : null
+        );
+      } catch (err) {
+        console.warn("[BatchProgress] polling failed:", err);
+      } finally {
+        inflight = false;
+      }
+    };
+
+    const timer = setInterval(tick, 3000);
+    void tick();
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [
+    project?.id,
+    batchProgress?.action,
+    batchProgress?.targetShotIds,
+    generatingFrames,
+    generatingSceneFrames,
+    generatingVideoPrompts,
+    generatingVideos,
+    fetchProject,
+    shots,
+  ]);
 
   return (
     <div className="animate-page-in space-y-4">
@@ -851,6 +1042,38 @@ export default function EpisodeStoryboardPage() {
               )}
               {generating ? t("common.generating") : t("project.generateShots")}
             </Button>
+            <Button
+              onClick={handlePreviewReplanLongShots}
+              disabled={anyGenerating || previewingReplanLongShots || totalShots === 0}
+              variant="ghost"
+              size="sm"
+              title={t("storyboard.replanLongShotsPreviewHelp")}
+            >
+              {previewingReplanLongShots ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              {previewingReplanLongShots
+                ? t("storyboard.replanLongShotsPreviewRunning")
+                : t("storyboard.replanLongShotsPreview")}
+            </Button>
+            <Button
+              onClick={handleReplanLongShots}
+              disabled={anyGenerating || replanningLongShots || totalShots === 0}
+              variant="outline"
+              size="sm"
+              title={t("storyboard.replanLongShotsHelp")}
+            >
+              {replanningLongShots ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              {replanningLongShots
+                ? t("storyboard.replanLongShotsRunning")
+                : t("storyboard.replanLongShots")}
+            </Button>
           </div>
 
           {/* Row 2: Frames */}
@@ -1050,17 +1273,36 @@ export default function EpisodeStoryboardPage() {
             <div className="flex items-center gap-3 rounded-lg border p-3 bg-muted/50">
               <Loader2 className="h-4 w-4 animate-spin" />
               <div className="flex-1">
+                {(() => {
+                  const progressNow = Math.min(
+                    batchProgress.total,
+                    batchProgress.completed +
+                      (batchProgress.inProgress || 0) +
+                      batchProgress.failed.length
+                  );
+                  return (
                 <div className="h-2 rounded-full bg-muted overflow-hidden">
                   <div
                     className="h-full rounded-full bg-primary transition-all duration-300"
                     style={{
-                      width: `${batchProgress.total > 0 ? (batchProgress.completed / batchProgress.total) * 100 : 0}%`,
+                      width: `${batchProgress.total > 0 ? (progressNow / batchProgress.total) * 100 : 0}%`,
                     }}
                   />
                 </div>
+                  );
+                })()}
               </div>
               <span className="text-sm text-muted-foreground tabular-nums">
-                {batchProgress.completed}/{batchProgress.total}
+                {Math.min(
+                  batchProgress.total,
+                  batchProgress.completed +
+                    (batchProgress.inProgress || 0) +
+                    batchProgress.failed.length
+                )}
+                /{batchProgress.total}
+                {(batchProgress.inProgress || 0) > 0 && (
+                  <span className="ml-1">({batchProgress.inProgress} running)</span>
+                )}
                 {batchProgress.failed.length > 0 && (
                   <span className="text-destructive ml-1">
                     ({batchProgress.failed.length} failed)

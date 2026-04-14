@@ -8,7 +8,16 @@ let initialized = false;
 export function initializeProviders() {
   if (initialized) return;
 
-  if (process.env.OPENAI_API_KEY) {
+  const hasOpenAICompat = !!(
+    process.env.OPENAI_COMPAT_API_KEY?.trim() ||
+    process.env.OPENAI_API_KEY?.trim()
+  );
+  const hasSeedanceCompat = !!(
+    process.env.VOLCENGINE_VIDEO_API_KEY?.trim() ||
+    process.env.SEEDANCE_API_KEY?.trim()
+  );
+
+  if (hasOpenAICompat) {
     setDefaultAIProvider(
       new OpenAIProvider(),
       (uploadDir) => new OpenAIProvider({ ...(uploadDir && { uploadDir }) }),
@@ -20,7 +29,7 @@ export function initializeProviders() {
     );
   }
 
-  if (process.env.SEEDANCE_API_KEY) {
+  if (hasSeedanceCompat) {
     setDefaultVideoProvider(
       new SeedanceProvider(),
       (uploadDir) => new SeedanceProvider({ ...(uploadDir && { uploadDir }) }),

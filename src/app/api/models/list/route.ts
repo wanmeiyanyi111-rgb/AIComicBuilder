@@ -1,4 +1,9 @@
 import { NextResponse } from "next/server";
+import {
+  CANONICAL_DOUBAO_SEED_2_PRO,
+  CANONICAL_NANO_BANANA_2,
+  CANONICAL_SEEDANCE_1_5_PRO,
+} from "@/lib/ai/model-aliases";
 
 interface ListRequest {
   protocol: string;
@@ -11,11 +16,34 @@ interface ModelItem {
   name: string;
 }
 
+const OPENAI_RECOMMENDED_MODELS: ModelItem[] = [
+  { id: CANONICAL_DOUBAO_SEED_2_PRO, name: "Doubao-Seed-2.0-pro" },
+  { id: CANONICAL_NANO_BANANA_2, name: "NanoBanana2" },
+];
+
+const SEEDANCE_PRESET_MODELS: ModelItem[] = [
+  { id: CANONICAL_SEEDANCE_1_5_PRO, name: "seedance1.5pro" },
+  { id: "doubao-seedance-1-5-pro-250528", name: "Seedance 1.5 Pro (250528)" },
+  { id: "doubao-seedance-2-0-260128", name: "Seedance 2.0 (260128)" },
+];
+
+const WUYIN_PRESET_MODELS: ModelItem[] = [
+  { id: CANONICAL_NANO_BANANA_2, name: "NanoBanana2" },
+];
+
 function buildModelsUrl(baseUrl: string): string {
-  let url = baseUrl.replace(/\/+$/, "");
+  const url = baseUrl.replace(/\/+$/, "");
+  // Volcengine Ark models endpoint
+  if (url.endsWith("/api/v3")) {
+    return url + "/models";
+  }
   // If baseUrl already ends with /v1, don't duplicate
   if (url.endsWith("/v1")) {
     return url + "/models";
+  }
+  // Common Ark host form: https://ark.cn-beijing.volces.com
+  if (/ark\.cn-beijing\.volces\.com$/i.test(url)) {
+    return url + "/api/v3/models";
   }
   return url + "/v1/models";
 }
@@ -38,6 +66,14 @@ async function fetchModels(baseUrl: string, apiKey: string): Promise<ModelItem[]
     throw new Error("Unexpected response format: missing data array");
   }
   return data.data.map((m) => ({ id: m.id, name: m.id }));
+}
+
+function mergeRecommendedModels(models: ModelItem[], recommended: ModelItem[]) {
+  const dedup = new Map<string, ModelItem>();
+  for (const m of [...recommended, ...models]) {
+    if (!dedup.has(m.id)) dedup.set(m.id, m);
+  }
+  return Array.from(dedup.values());
 }
 
 async function fetchGeminiModels(baseUrl: string, apiKey: string): Promise<ModelItem[]> {
@@ -65,6 +101,10 @@ async function fetchGeminiModels(baseUrl: string, apiKey: string): Promise<Model
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as ListRequest;
+
+    if (body.protocol === "seedance") {
+      return NextResponse.json({ models: SEEDANCE_PRESET_MODELS });
+    }
 
     if (body.protocol === "kling") {
       return NextResponse.json({
@@ -105,11 +145,27 @@ export async function POST(request: Request) {
       });
     }
 
+    if (body.protocol === "wuyin") {
+      return NextResponse.json({ models: WUYIN_PRESET_MODELS });
+    }
+
     if (!body.baseUrl) {
       return NextResponse.json({ error: "Base URL is required" }, { status: 400 });
     }
     if (!body.apiKey) {
       return NextResponse.json({ error: "API Key is required" }, { status: 400 });
+    }
+
+    if (body.protocol === "openai") {
+      try {
+        const models = await fetchModels(body.baseUrl, body.apiKey);
+        return NextResponse.json({
+          models: mergeRecommendedModels(models, OPENAI_RECOMMENDED_MODELS),
+        });
+      } catch {
+        // Some OpenAI-compatible services disable model listing; keep UX usable.
+        return NextResponse.json({ models: OPENAI_RECOMMENDED_MODELS });
+      }
     }
 
     const models = body.protocol === "gemini"

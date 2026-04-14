@@ -24,6 +24,23 @@
     "title": "내 프로젝트",
     "newProject": "새 프로젝트",
     "noProjects": "아직 프로젝트가 없습니다. 위 버튼을 클릭하여 만들어 보세요.",
+    "styleLabel": "프로젝트 스타일",
+    "styleHelp": "이 프로젝트의 모든 에피소드가 같은 스타일을 따릅니다.",
+    "transitionProfileLabel": "샷 전환 스타일",
+    "transitionProfileHelp": "분경 전환 리듬을 제어합니다. 최종 결과는 AI와 엔진 규칙이 함께 결정합니다.",
+    "transitionProfileOptions": {
+      "balanced": "균형형",
+      "cinematic": "시네마틱",
+      "dynamic": "다이내믹",
+      "smooth": "스무스"
+    },
+    "styleOptions": {
+      "cinematic_realism": "시네마틱 리얼리즘",
+      "anime_dynamic": "다이내믹 애니메이션",
+      "ink_wash": "수묵화 스타일",
+      "film_noir": "필름 누아르",
+      "cyberpunk_neon": "사이버펑크 네온"
+    },
     "deleteConfirmTitle": "프로젝트 삭제",
     "deleteConfirmDesc": "\"{title}\"을(를) 삭제하시겠습니까? 이 작업은 되돌릴 수 없으며 관련된 모든 데이터가 영구적으로 삭제됩니다.",
     "projectStatus": {
@@ -95,7 +112,11 @@
     "kanbanBatchGenerate": "일괄 생성 ({count})",
     "continueFromPrev": "이전 회차 이어서",
     "continueFromPrevTooltip": "이전 회차의 마지막 프레임을 첫 프레임으로 사용",
-    "prevEpisodeNoFrames": "이전 회차에 생성된 프레임이 없습니다"
+    "prevEpisodeNoFrames": "이전 회차에 생성된 프레임이 없습니다",
+    "styleApplyAllEpisodes": "저장 후 전체 에피소드 동기화",
+    "styleApplying": "동기화 중...",
+    "styleApplySuccess": "프로젝트 스타일을 업데이트하고 전체 에피소드에 동기화했습니다",
+    "styleApplyError": "프로젝트 스타일 업데이트에 실패했습니다"
   },
   "character": {
     "name": "캐릭터 이름",
@@ -125,6 +146,31 @@
     "relType_rival": "경쟁",
     "relType_stranger": "타인",
     "relType_neutral": "중립"
+  },
+  "visualAsset": {
+    "title": "배경/소품",
+    "subtitle": "프로젝트 스타일 제약을 적용해 배경 이미지와 소품 이미지를 개별 생성합니다.",
+    "sceneTitle": "배경 이미지",
+    "propTitle": "소품 이미지",
+    "sceneHint": "자동 제약: 배경 이미지에 캐릭터나 인물 실루엣이 들어가면 안 됩니다.",
+    "propHint": "자동 제약: 단일 소품, 순백 배경, 인체 요소 없음.",
+    "addScene": "배경 추가",
+    "addProp": "소품 추가",
+    "extractCandidates": "후보 자동 추출",
+    "extractingCandidates": "추출 중...",
+    "extractSuccess": "후보 {count}개를 추가했습니다 (배경 {scenes} / 소품 {props})",
+    "extractNoNew": "추가할 새 후보가 없습니다",
+    "batchGenerate": "일괄 생성",
+    "generate": "이미지 생성",
+    "noImage": "이미지 없음",
+    "noScene": "배경 자산이 없습니다. '배경 추가'를 눌러 시작하세요.",
+    "noProp": "소품 자산이 없습니다. '소품 추가'를 눌러 시작하세요.",
+    "sceneName": "배경 이름",
+    "propName": "소품 이름",
+    "scenePrompt": "환경, 조명, 분위기, 재질을 입력...",
+    "propPrompt": "재질, 형태, 디테일을 입력...",
+    "defaultSceneName": "새 배경",
+    "defaultPropName": "새 소품"
   },
   "shot": {
     "sequence": "샷 {number}",
@@ -192,7 +238,20 @@
     "generateRefPrompts": "참고 이미지 프롬프트 생성",
     "batchGenerateRefImages": "참고 이미지 일괄 생성",
     "needTwoVersions": "비교하려면 2개 이상의 버전이 필요합니다",
-    "noFrame": "프레임 없음"
+    "noFrame": "프레임 없음",
+    "replanLongShots": "긴 샷 재계획",
+    "replanLongShotsPreview": "분할 미리보기",
+    "replanLongShotsPreviewHelp": "DB에 쓰지 않고 분할 결과를 미리 계산합니다",
+    "replanLongShotsPreviewRunning": "미리보기 계산 중...",
+    "replanLongShotsHelp": "5초를 초과한 샷을 3-5초 세그먼트로 자동 분할합니다",
+    "replanLongShotsRunning": "재계획 중...",
+    "replanLongShotsSuccess": "긴 샷 {split}개를 재계획하고 세그먼트 {added}개를 추가했습니다",
+    "replanLongShotsDryRunSummary": "미리보기 완료: 샷 {before} → {after}, 긴 샷 {split}개 분할, 세그먼트 {added}개 추가 예정",
+    "replanLongShotsError": "긴 샷 재계획에 실패했습니다",
+    "noLongShotsToReplan": "현재 범위에 5초를 초과한 샷이 없습니다",
+    "segmentBadge": "세그먼트 {index}/{total}",
+    "tailFrameLinkBadge": "꼬리 프레임 연결",
+    "originalDurationBadge": "원본 길이 {seconds}s"
   },
   "episode": {
     "title": "에피소드 관리",
@@ -256,6 +315,7 @@
     "importStep": {
       "parse": "텍스트 분석",
       "characters": "캐릭터 추출",
+      "sceneProps": "장면/소품 추출",
       "split": "자동 분할",
       "generate": "에피소드 생성"
     }
@@ -319,6 +379,12 @@
       "characterExtract": "캐릭터 추출",
       "importCharacterExtract": "가져오기 캐릭터 추출",
       "characterImage": "캐릭터 디자인 시트",
+      "scenePropExtract": "배경/소품 추출",
+      "scenePropExtractDesc": "스크립트에서 배경/소품 후보를 추출해 바로 이미지 생성 가능한 프롬프트로 변환",
+      "sceneImage": "배경 디자인 이미지",
+      "sceneImageDesc": "배경 단독 생성 프롬프트 템플릿 (인물 금지)",
+      "propImage": "소품 디자인 이미지",
+      "propImageDesc": "소품 단독 생성 프롬프트 템플릿 (단일 객체·흰 배경)",
       "shotSplit": "샷 분해",
       "frameGenerateFirst": "첫 번째 프레임",
       "frameGenerateLast": "마지막 프레임",
@@ -368,7 +434,11 @@
       "useProjectPromptsDesc": "비활성화 시 글로벌 기본값 사용. 활성화하면 이 프로젝트에 맞게 커스터마이즈할 수 있습니다.",
       "customize": "커스터마이즈",
       "useGlobal": "글로벌 사용",
-      "modifiedCount": "{count}개 수정됨"
+      "modifiedCount": "{count}개 수정됨",
+      "styleApplyAllEpisodes": "저장 후 전체 에피소드 동기화",
+      "styleApplying": "동기화 중...",
+      "styleApplySuccess": "프로젝트 스타일을 업데이트하고 전체 에피소드에 동기화했습니다",
+      "styleApplyError": "프로젝트 스타일 업데이트에 실패했습니다"
     },
     "presets": {
       "title": "프리셋 템플릿",
@@ -490,7 +560,9 @@
       "rules": "규칙",
       "rulesDesc": "본 프롬프트의 핵심 규칙",
       "durationStrategy": "길이 전략",
-      "durationStrategyDesc": "샷 길이에 따른 묘사 세분화 규칙"
+      "durationStrategyDesc": "샷 길이에 따른 묘사 세분화 규칙",
+      "transitionProfileId": "전환 프리셋",
+      "transitionProfileIdDesc": "샷 전환 정책 프리셋 ID (balanced / cinematic / dynamic / smooth)"
     }
   }
 }

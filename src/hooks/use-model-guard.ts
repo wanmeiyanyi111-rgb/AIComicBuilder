@@ -1,17 +1,8 @@
 "use client";
 
 import { useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { useLocale, useTranslations } from "next-intl";
 import { useModelStore } from "@/stores/model-store";
-import { toast } from "sonner";
 import type { Capability } from "@/stores/model-store";
-
-const messageKeys: Record<Capability, string> = {
-  text: "notConfiguredText",
-  image: "notConfiguredImage",
-  video: "notConfiguredVideo",
-};
 
 /**
  * Returns a guard() function for the given model capability.
@@ -20,9 +11,6 @@ const messageKeys: Record<Capability, string> = {
  * Returns true if the model is configured and the action can proceed.
  */
 export function useModelGuard(capability: Capability): () => boolean {
-  const router = useRouter();
-  const locale = useLocale();
-  const t = useTranslations("settings");
   // Use selector pattern (consistent with codebase; avoids re-renders on unrelated store changes)
   const getModelConfig = useModelStore((s) => s.getModelConfig);
 
@@ -35,16 +23,13 @@ export function useModelGuard(capability: Capability): () => boolean {
 
     const config = getModelConfig();
 
+    // Support server-side env fallback (OPENAI_COMPAT_*, IMAGE_MODEL_*, VOLCENGINE_VIDEO_*):
+    // when local default model is not selected in browser storage, do not hard-block here.
+    // Let API routes resolve provider from env and return the authoritative result.
     if (config[capability] === null) {
-      toast.warning(t(messageKeys[capability]), {
-        action: {
-          label: t("goSettings"),
-          onClick: () => router.push(`/${locale}/settings`),
-        },
-      });
-      return false;
+      return true;
     }
 
     return true;
-  }, [capability, getModelConfig, locale, router, t]);
+  }, [capability, getModelConfig]);
 }

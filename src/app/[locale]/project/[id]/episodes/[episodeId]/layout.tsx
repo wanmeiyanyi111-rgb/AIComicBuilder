@@ -15,17 +15,31 @@ export default function EpisodeLayout({
 }) {
   const { id, episodeId } = use(params);
   const t = useTranslations("common");
-  const { project, loading, fetchProject } = useProjectStore();
+  const { project, loading, fetchError, fetchProject } = useProjectStore();
 
   useEffect(() => {
     fetchProject(id, episodeId);
   }, [id, episodeId, fetchProject]);
 
-  if (loading || !project) {
+  if (loading) {
     return (
       <div className="flex min-h-[60vh] items-center justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-primary" />
         <p className="ml-2 text-sm text-[--text-muted]">{t("loading")}</p>
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <div className="rounded-2xl border border-[--border-subtle] bg-white p-6 text-center">
+          <p className="text-sm text-[--text-secondary]">
+            {fetchError === "not_found"
+              ? "Episode project not found. Please reopen from dashboard."
+              : (fetchError || "Failed to load episode project")}
+          </p>
+        </div>
       </div>
     );
   }

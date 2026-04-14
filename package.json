@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:smart": "bash scripts/dev-start.sh",
+    "test:smoke": "tsx --test tests/smoke/**/*.test.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -54,6 +56,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }

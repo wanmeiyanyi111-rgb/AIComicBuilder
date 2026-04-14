@@ -1,4 +1,5 @@
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema";
 import fs from "node:fs";
 import path from "node:path";
@@ -8,10 +9,18 @@ type DrizzleDB = ReturnType<typeof drizzle<typeof schema>>;
 const globalForDb = globalThis as unknown as {
   sqlite: unknown;
   drizzleDb: DrizzleDB;
+  migrationsDone?: boolean;
 };
 
 function createDb(): DrizzleDB {
-  if (globalForDb.drizzleDb) return globalForDb.drizzleDb;
+  if (globalForDb.drizzleDb) {
+    if (!globalForDb.migrationsDone) {
+      const migrationsFolder = path.resolve("drizzle");
+      migrate(globalForDb.drizzleDb, { migrationsFolder });
+      globalForDb.migrationsDone = true;
+    }
+    return globalForDb.drizzleDb;
+  }
 
   // Dynamic require to avoid loading native binary at build time
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -33,6 +42,10 @@ function createDb(): DrizzleDB {
   sqlite.pragma("foreign_keys = ON");
 
   const instance = drizzle(sqlite, { schema });
+  const migrationsFolder = path.resolve("drizzle");
+  migrate(instance, { migrationsFolder });
+  globalForDb.migrationsDone = true;
+
   if (process.env.NODE_ENV !== "production") {
     globalForDb.drizzleDb = instance;
   }
@@ -40,7 +53,6 @@ function createDb(): DrizzleDB {
 }
 
 export function runMigrations() {
-  const { migrate } = require("drizzle-orm/better-sqlite3/migrator");
   const migrationsFolder = path.resolve("drizzle");
   migrate(createDb(), { migrationsFolder });
 }
@@ -51,7 +63,7 @@ export const db: DrizzleDB = new Proxy({} as DrizzleDB, {
     const instance = createDb();
     const value = (instance as never)[prop];
     if (typeof value === "function") {
-      return (value as Function).bind(instance);
+      return (value as (...args: unknown[]) => unknown).bind(instance);
     }
     return value;
   },

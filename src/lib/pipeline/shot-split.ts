@@ -3,10 +3,14 @@ import { shots, dialogues, characters, characterRelations, scenes, projects, epi
 import { resolveAIProvider } from "@/lib/ai/provider-factory";
 import type { ModelConfigPayload } from "@/lib/ai/provider-factory";
 import { buildShotSplitPrompt } from "@/lib/ai/prompts/shot-split";
-import { resolvePrompt } from "@/lib/ai/prompts/resolver";
+import { resolveSlotContents } from "@/lib/ai/prompts/resolver";
+import { getPromptDefinition } from "@/lib/ai/prompts/registry";
 import { eq, and, or, isNull } from "drizzle-orm";
 import { id as genId } from "@/lib/id";
 import type { Task } from "@/lib/task-queue";
+import { expandShotsForVideoControl } from "@/lib/shot-segmentation";
+import { planShotTransitions, summarizeTransitionUsage } from "@/lib/shot-transition-planner";
+import { normalizeShotTransitionProfileId } from "@/lib/shot-transition-profile";
 
 export async function handleShotSplit(task: Task) {
   const payload = task.payload as {
@@ -65,10 +69,15 @@ export async function handleShotSplit(task: Task) {
     if (project?.colorPalette) colorPalette = project.colorPalette;
   }
 
-  const systemPrompt = await resolvePrompt("shot_split", {
+  const shotSplitSlots = await resolveSlotContents("shot_split", {
     userId: payload.userId ?? "",
     projectId: payload.projectId,
   });
+  const shotSplitDef = getPromptDefinition("shot_split")!;
+  const transitionProfileId = normalizeShotTransitionProfileId(
+    shotSplitSlots.transition_profile_id
+  );
+  const systemPrompt = shotSplitDef.buildFullPrompt(shotSplitSlots);
 
   const ai = resolveAIProvider(payload.modelConfig);
   const performanceStyles = projectCharacters
@@ -97,10 +106,27 @@ export async function handleShotSplit(task: Task) {
   const isSceneGrouped = parsed.length > 0 && Array.isArray((parsed[0] as Record<string, unknown>).shots);
 
   const created = [];
+  const pendingShots: Array<{
+    shotData: Record<string, unknown>;
+    sceneId?: string;
+    chainGroupId?: string | null;
+    chainIndex?: number;
+    chainTotal?: number;
+    inheritPrevLastFrame?: number;
+    originalDuration?: number;
+  }> = [];
 
   const insertShot = async (
     shotData: Record<string, unknown>,
-    sceneId?: string
+    options?: {
+      sceneId?: string;
+      chainGroupId?: string | null;
+      chainIndex?: number;
+      chainTotal?: number;
+      prevShotId?: string | null;
+      inheritPrevLastFrame?: number;
+      originalDuration?: number;
+    }
   ) => {
     const shotId = genId();
     // Metadata-only insert. Image/video assets live in the shot_assets table
@@ -124,7 +150,15 @@ export async function handleShotSplit(task: Task) {
         soundDesign: (shotData.soundDesign as string) || "",
         musicCue: (shotData.musicCue as string) || "",
         episodeId: payload.episodeId ?? null,
-        sceneId: sceneId ?? null,
+        sceneId: options?.sceneId ?? null,
+        chainGroupId: options?.chainGroupId ?? null,
+        chainIndex: options?.chainIndex ?? 1,
+        chainTotal: options?.chainTotal ?? 1,
+        prevShotId: options?.prevShotId ?? null,
+        inheritPrevLastFrame: options?.inheritPrevLastFrame ?? 0,
+        originalDuration:
+          options?.originalDuration ??
+          ((shotData.duration as number) || 10),
       })
       .returning();
 
@@ -167,18 +201,101 @@ export async function handleShotSplit(task: Task) {
 
       const sceneShots = (scene.shots as Array<Record<string, unknown>>) || [];
       for (const shotData of sceneShots) {
-        shotData.sequence = globalSequence++;
-        const record = await insertShot(shotData, sceneId);
-        created.push(record);
+        const segmentedShots = expandShotsForVideoControl(
+          [
+            {
+              ...shotData,
+              sequence: globalSequence,
+              duration: (shotData.duration as number) || 10,
+            },
+          ],
+          () => genId()
+        );
+        for (const segmented of segmentedShots) {
+          segmented.sequence = globalSequence++;
+          pendingShots.push({
+            shotData: segmented as unknown as Record<string, unknown>,
+            sceneId,
+            chainGroupId: segmented.chainGroupId,
+            chainIndex: segmented.chainIndex,
+            chainTotal: segmented.chainTotal,
+            inheritPrevLastFrame: segmented.inheritPrevLastFrame,
+            originalDuration: segmented.originalDuration,
+          });
+        }
       }
     }
   } else {
     // Flat shot array (backwards compat)
+    let globalSequence = 1;
     for (const shotData of parsed) {
-      const record = await insertShot(shotData);
-      created.push(record);
+      const segmentedShots = expandShotsForVideoControl(
+        [
+          {
+            ...shotData,
+            sequence: globalSequence,
+            duration: (shotData.duration as number) || 10,
+          },
+        ],
+        () => genId()
+      );
+      for (const segmented of segmentedShots) {
+        segmented.sequence = globalSequence++;
+        pendingShots.push({
+          shotData: segmented as unknown as Record<string, unknown>,
+          chainGroupId: segmented.chainGroupId,
+          chainIndex: segmented.chainIndex,
+          chainTotal: segmented.chainTotal,
+          inheritPrevLastFrame: segmented.inheritPrevLastFrame,
+          originalDuration: segmented.originalDuration,
+        });
+      }
     }
   }
+
+  const plannedTransitions = planShotTransitions(
+    pendingShots.map((item) => ({
+      sequence: Number(item.shotData.sequence) || 0,
+      sceneDescription: (item.shotData.sceneDescription as string | null | undefined) ?? null,
+      prompt: (item.shotData.prompt as string | null | undefined) ?? null,
+      motionScript: (item.shotData.motionScript as string | null | undefined) ?? null,
+      videoScript: (item.shotData.videoScript as string | null | undefined) ?? null,
+      transitionIn: (item.shotData.transitionIn as string | null | undefined) ?? null,
+      transitionOut: (item.shotData.transitionOut as string | null | undefined) ?? null,
+      chainGroupId: item.chainGroupId ?? null,
+      inheritPrevLastFrame: item.inheritPrevLastFrame ?? 0,
+    })),
+    { profileId: transitionProfileId }
+  );
+
+  for (let i = 0; i < pendingShots.length; i++) {
+    pendingShots[i].shotData.transitionIn = plannedTransitions[i].transitionIn;
+    pendingShots[i].shotData.transitionOut = plannedTransitions[i].transitionOut;
+  }
+
+  const lastInsertedByChainGroup = new Map<string, string>();
+  for (const pending of pendingShots) {
+    const prevShotId = pending.chainGroupId
+      ? (lastInsertedByChainGroup.get(pending.chainGroupId) ?? null)
+      : null;
+    const record = await insertShot(pending.shotData, {
+      sceneId: pending.sceneId,
+      chainGroupId: pending.chainGroupId,
+      chainIndex: pending.chainIndex,
+      chainTotal: pending.chainTotal,
+      prevShotId,
+      inheritPrevLastFrame: pending.inheritPrevLastFrame,
+      originalDuration: pending.originalDuration,
+    });
+    if (pending.chainGroupId) {
+      lastInsertedByChainGroup.set(pending.chainGroupId, record.id);
+    }
+    created.push(record);
+  }
+
+  console.log(
+    `[PipelineShotSplit] Transition profile=${transitionProfileId} usage ${JSON.stringify(summarizeTransitionUsage(plannedTransitions))}`
+  );
 
   return { shots: created };
 }

@@ -8,6 +8,8 @@ export class ApiError extends Error {
 }
 
 export async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  // Backward compatibility: send legacy header when available so existing
+  // projects keyed by historical localStorage uid remain accessible.
   const userId = getUserId();
   const headers = new Headers(options.headers);
   if (userId) headers.set("x-user-id", userId);

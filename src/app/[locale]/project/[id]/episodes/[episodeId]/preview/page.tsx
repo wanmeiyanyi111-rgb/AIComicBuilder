@@ -41,6 +41,7 @@ export default function EpisodePreviewPage() {
   const [assembling, setAssembling] = useState(false);
   const [selectedShot, setSelectedShot] = useState(0);
   const [videoValid, setVideoValid] = useState<boolean | null>(null);
+  const [sequenceAutoplay] = useState(true);
   const checkedUrl = useRef<string | null>(null);
 
   const finalVideoUrl = project?.finalVideoUrl ?? null;
@@ -81,6 +82,22 @@ export default function EpisodePreviewPage() {
   const completedVideos = shotsWithVideo.length;
   const currentShot = shotsWithVideo[selectedShot];
   const hasValidVideo = finalVideoUrl && videoValid === true;
+
+  // Keep selected index in range whenever the available clip list changes
+  useEffect(() => {
+    if (shotsWithVideo.length === 0) {
+      if (selectedShot !== 0) setSelectedShot(0);
+      return;
+    }
+    if (selectedShot > shotsWithVideo.length - 1) {
+      setSelectedShot(shotsWithVideo.length - 1);
+    }
+  }, [shotsWithVideo.length, selectedShot]);
+
+  function handleClipEnded() {
+    if (!sequenceAutoplay || shotsWithVideo.length <= 1) return;
+    setSelectedShot((prev) => (prev + 1) % shotsWithVideo.length);
+  }
 
   async function handleAssemble() {
     if (!project) return;
@@ -211,6 +228,7 @@ export default function EpisodePreviewPage() {
               key={currentShot.id + previewMode}
               controls
               autoPlay={!hasValidVideo}
+              onEnded={handleClipEnded}
               className="aspect-video w-full"
               src={uploadUrl(getVideoUrl(currentShot)!)}
             />

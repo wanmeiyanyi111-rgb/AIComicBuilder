@@ -5,11 +5,15 @@
 
 import {
   languageRuleBlock,
-  referenceImageBlock,
   artStyleBlock,
   themeStyleMappingBlock,
   physicsRealismBlock,
 } from "./blocks";
+import {
+  DEFAULT_SHOT_TRANSITION_PROFILE,
+  getShotTransitionPolicyText,
+  normalizeShotTransitionProfileId,
+} from "@/lib/shot-transition-profile";
 
 // ── Types ────────────────────────────────────────────────
 
@@ -761,7 +765,8 @@ const CHAR_IMAGE_STYLE_MATCHING = `=== 关键：画风匹配（最高优先级�
 仔细阅读下方的角色描述。描述中指定或暗示了画风（如 动漫、漫画、写实照片级、卡通、水彩、像素风、油画 等）。
 你必须精确匹配该画风。不要默认使用写实风格。不要覆盖描述中的风格。
 - 如果描述中提到"动漫"/"漫画"/"anime"/"manga" → 生成动漫/漫画风格插画
-- 如果描述中提到"写实"/"真人"/"photorealistic" → 生成写实渲染
+- 如果描述中提到"电影级写实"/"写实电影摄影"/"真人"/"实拍"/"photorealistic"/"cinematic realism" → 锁定电影级写实摄影语言
+- 电影级写实模式下，禁止 2.5D、赛璐珞、动漫线稿、Q版比例或国漫3D风格化材质
 - 如果描述暗示其他风格 → 忠实遵循该风格
 - 如果完全未提及风格 → 根据角色的背景和类型推断最合适的风格
 
@@ -867,6 +872,197 @@ const characterImageDef: PromptDefinition = {
       `=== 最终输出标准 ===`,
       `专业角色设计参考设定图。在所选画风内达到最高质量。零AI瑕疵，视图之间零不一致。这是唯一的权威参考——所有后续生成的画面必须精确再现此角色的此风格。`,
     ].join("\n");
+  },
+};
+
+// ─── 7. scene_prop_extract ──────────────────────────────
+
+const SCENE_PROP_EXTRACT_ROLE_DEFINITION = `你是一位资深电影美术指导与场景设定师。你的任务是从剧本中提取可用于视觉生产的场景与道具候选清单，为后续生图流水线提供可直接执行的结构化输入。`;
+
+const SCENE_PROP_EXTRACT_RULES = `规则：
+1. 仅提取与视觉制作直接相关的内容，不要输出剧情解说。
+2. 场景（scene）必须是“物理地点/空间环境”，例如“废弃地铁站月台”“古寺主殿内庭”。
+3. 道具（prop）必须是“可单独成图的具体物件”，例如“裂纹青铜令牌”“折叠式侦察无人机”。
+4. 场景描述里禁止人物描写；道具描述里禁止人物肢体与穿戴态。
+5. 对每一项生成可直接用于生图的 prompt，必须包含材质、结构、光线、色彩或时代语境等关键信息。
+6. 每条 prompt 必须显式体现项目风格信息（画风 + 光照 + 色彩），不能只写“物体名+地点名”。
+7. 场景 prompt 必须包含镜头语言（至少写出景别/机位/镜头焦段其二），例如“广角全景、低机位、35mm”等；道具 prompt 至少给出拍摄构图与机位（如“居中平视特写、50mm产品质感”）。
+8. 名称简洁（4-12字优先），prompt 具体可执行，避免空泛词语。
+9. 若剧本未明确说明，可依据上下文做最小必要推断，但不得杜撰关键设定。`;
+
+const SCENE_PROP_EXTRACT_OUTPUT_FORMAT = `仅输出 JSON 对象，不要 markdown，不要解释文字：
+{
+  "scenes": [
+    {
+      "name": "场景名",
+      "prompt": "用于生图的场景提示词（纯环境，不含人物）"
+    }
+  ],
+  "props": [
+    {
+      "name": "道具名",
+      "prompt": "用于生图的道具提示词（单体道具，不含人物，白底可抠图）"
+    }
+  ]
+}
+
+输出硬约束：
+- scenes / props 均可为空数组，但必须存在
+- name 与 prompt 必须是字符串
+- 不得输出多余字段`;
+
+const SCENE_PROP_EXTRACT_LANGUAGE_RULES = `【关键语言规则】使用与输入剧本一致的语言输出字段内容。中文输入→中文输出，英文输入→英文输出。仅返回 JSON。`;
+
+const scenePropExtractDef: PromptDefinition = {
+  key: "scene_prop_extract",
+  nameKey: "promptTemplates.prompts.scenePropExtract",
+  descriptionKey: "promptTemplates.prompts.scenePropExtractDesc",
+  category: "frame",
+  slots: [
+    slot("role_definition", SCENE_PROP_EXTRACT_ROLE_DEFINITION, true),
+    slot("extraction_rules", SCENE_PROP_EXTRACT_RULES, true),
+    slot("output_format", SCENE_PROP_EXTRACT_OUTPUT_FORMAT, false),
+    slot("language_rules", SCENE_PROP_EXTRACT_LANGUAGE_RULES, false),
+  ],
+  buildFullPrompt(sc) {
+    const s = this.slots;
+    const r = (k: string) => resolve(sc, s, k);
+    return [r("role_definition"), "", r("extraction_rules"), "", r("output_format"), "", r("language_rules")].join("\n");
+  },
+};
+
+// ─── 8. scene_image ─────────────────────────────────────
+
+const SCENE_IMAGE_STYLE_MATCHING = `=== 场景画风匹配（最高优先级）===
+你必须严格继承项目整体风格，并与同项目其他镜头保持统一世界观与美术语言。
+若项目给定了时代、美术方向、色彩基调，必须全部执行。
+- 若项目风格为 cinematic_realism 或描述中包含"电影级写实/实拍/photorealistic"，必须按写实电影摄影渲染，禁止 2.5D 与卡通化边缘。
+
+${themeStyleMappingBlock()}`;
+
+const SCENE_IMAGE_COMPOSITION_RULES = `=== 场景构图规则 ===
+- 输出纯环境场景图，不得出现人物、角色、人体部位、背影、剪影、人形轮廓、服装被穿戴状态
+- 重点刻画空间层次（前景/中景/远景）、建筑结构、材质细节、光线走向与氛围
+- 允许出现静态环境道具（桌椅、门窗、旗帜、车辆等），但这些是空间元素，不是角色
+- 画面需具备电影镜头感（景别、机位、透视关系明确）`;
+
+const SCENE_IMAGE_RENDERING = `=== 渲染与光照 ===
+- 画面质量高，材质真实可信（木、金属、石材、布料、玻璃等）
+- 光源方向明确，避免“平光无层次”
+- 色彩与项目风格一致，保证系列化统一
+- 不出现文字、水印、LOGO`;
+
+const SCENE_IMAGE_RULES = `=== 禁止项（硬约束）===
+- 禁止任何人物或人形元素
+- 禁止角色名称、对白字幕、UI 覆盖层
+- 禁止把道具特写当作“场景全图”输出（需要完整空间语义）`;
+
+const sceneImageDef: PromptDefinition = {
+  key: "scene_image",
+  nameKey: "promptTemplates.prompts.sceneImage",
+  descriptionKey: "promptTemplates.prompts.sceneImageDesc",
+  category: "frame",
+  slots: [
+    slot("style_matching", SCENE_IMAGE_STYLE_MATCHING, true),
+    slot("composition_rules", SCENE_IMAGE_COMPOSITION_RULES, true),
+    slot("lighting_rendering", SCENE_IMAGE_RENDERING, true),
+    slot("rules", SCENE_IMAGE_RULES, true),
+  ],
+  buildFullPrompt(sc, params) {
+    const s = this.slots;
+    const r = (k: string) => resolve(sc, s, k);
+    const name = (params?.name as string) ?? "";
+    const basePrompt = (params?.basePrompt as string) ?? "";
+    const projectStyle = (params?.projectStyle as string) ?? "";
+
+    return [
+      "你正在生成一张专业场景设定图（scene concept frame）。",
+      "",
+      r("style_matching"),
+      "",
+      r("composition_rules"),
+      "",
+      r("lighting_rendering"),
+      "",
+      r("rules"),
+      "",
+      "=== 场景需求输入 ===",
+      `场景名：${name || "未命名场景"}`,
+      `场景描述：${basePrompt}`,
+      projectStyle ? `项目风格补充：${projectStyle}` : "",
+      "",
+      "最终要求：仅输出环境场景，不出现任何人物、人体部位、角色剪影、文字或水印。",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  },
+};
+
+// ─── 9. prop_image ──────────────────────────────────────
+
+const PROP_IMAGE_STYLE_MATCHING = `=== 道具画风匹配（最高优先级）===
+道具的材质语言、工艺细节和配色必须与项目整体美术风格一致。
+同项目道具需要具有系列一致性（不是随机风格拼贴）。
+- 若项目风格为 cinematic_realism 或提示词包含电影级写实语义，道具必须遵循写实摄影/写实CG电影材质，不可出现 2.5D 卡通化处理。
+
+${themeStyleMappingBlock()}`;
+
+const PROP_IMAGE_COMPOSITION_RULES = `=== 道具构图规则 ===
+- 单一道具主体，主体完整可见，不被裁切
+- 纯白背景（#FFFFFF），方便抠图复用
+- 不出现人物、手持、穿戴态、人体部位、角色剪影
+- 道具应居中或稳定构图，边缘清晰，轮廓完整`;
+
+const PROP_IMAGE_RENDERING = `=== 渲染与材质 ===
+- 明确材质类型（金属/木质/皮革/织物/塑料/能量体等）和做旧程度
+- 细节可读：结构、接缝、磨损、刻纹、机关、按钮等
+- 光照均匀且能体现体积，不可脏污发灰
+- 不出现文字、水印、LOGO`;
+
+const PROP_IMAGE_RULES = `=== 禁止项（硬约束）===
+- 禁止多人或多主体拼盘
+- 禁止复杂环境背景（必须白底）
+- 禁止把道具画成“角色正在使用中的画面”
+- 禁止字幕、品牌字样、参数面板`;
+
+const propImageDef: PromptDefinition = {
+  key: "prop_image",
+  nameKey: "promptTemplates.prompts.propImage",
+  descriptionKey: "promptTemplates.prompts.propImageDesc",
+  category: "frame",
+  slots: [
+    slot("style_matching", PROP_IMAGE_STYLE_MATCHING, true),
+    slot("composition_rules", PROP_IMAGE_COMPOSITION_RULES, true),
+    slot("lighting_rendering", PROP_IMAGE_RENDERING, true),
+    slot("rules", PROP_IMAGE_RULES, true),
+  ],
+  buildFullPrompt(sc, params) {
+    const s = this.slots;
+    const r = (k: string) => resolve(sc, s, k);
+    const name = (params?.name as string) ?? "";
+    const basePrompt = (params?.basePrompt as string) ?? "";
+    const projectStyle = (params?.projectStyle as string) ?? "";
+
+    return [
+      "你正在生成一张专业道具设定图（prop design sheet, single object）。",
+      "",
+      r("style_matching"),
+      "",
+      r("composition_rules"),
+      "",
+      r("lighting_rendering"),
+      "",
+      r("rules"),
+      "",
+      "=== 道具需求输入 ===",
+      `道具名：${name || "未命名道具"}`,
+      `道具描述：${basePrompt}`,
+      projectStyle ? `项目风格补充：${projectStyle}` : "",
+      "",
+      "最终要求：单主体道具 + 纯白背景，不出现人物或人体部位。",
+    ]
+      .filter(Boolean)
+      .join("\n");
   },
 };
 
@@ -1075,6 +1271,8 @@ const SHOT_SPLIT_LANGUAGE_RULES = `【关键语言规则】所有文本字段（
 const SHOT_SPLIT_PROPORTIONAL_TIERS_TEMPLATE = `=== 比例差异规则 ===
 {{PROPORTIONAL_TIERS}}`;
 
+const SHOT_SPLIT_TRANSITION_PROFILE_ID = DEFAULT_SHOT_TRANSITION_PROFILE;
+
 const shotSplitDef: PromptDefinition = {
   key: "shot_split",
   nameKey: "promptTemplates.prompts.shotSplit",
@@ -1088,6 +1286,7 @@ const shotSplitDef: PromptDefinition = {
     slot("motion_script_rules", SHOT_SPLIT_MOTION_SCRIPT_RULES, true),
     slot("video_script_rules", SHOT_SPLIT_VIDEO_SCRIPT_RULES, true),
     slot("proportional_tiers", SHOT_SPLIT_PROPORTIONAL_TIERS_TEMPLATE, true),
+    slot("transition_profile_id", SHOT_SPLIT_TRANSITION_PROFILE_ID, false),
     slot("camera_directions", SHOT_SPLIT_CAMERA_DIRECTIONS, true),
     slot(
       "cinematography_principles",
@@ -1122,6 +1321,10 @@ const shotSplitDef: PromptDefinition = {
     const durationRange = minDuration === maxDuration
       ? String(maxDuration)
       : `${minDuration}-${maxDuration}`;
+    const transitionProfileId = normalizeShotTransitionProfileId(
+      r("transition_profile_id")
+    );
+    const transitionPolicy = getShotTransitionPolicyText(transitionProfileId);
 
     const replaceDuration = (text: string) => text
       .replace(/\{\{MIN_DURATION\}\}-\{\{MAX_DURATION\}\}/g, durationRange)
@@ -1133,7 +1336,7 @@ const shotSplitDef: PromptDefinition = {
     // Unified metadata-only output format. Image prompts (first/last frame, ref images)
     // are produced by independent downstream prompts and stored in shot_assets table
     // discriminated by type, so both modes can coexist on the same shots.
-    let outputFormat = replaceDuration(r("output_format"));
+    const outputFormat = replaceDuration(r("output_format"));
 
     // Replace dynamic placeholders in cinematography_principles
     let cinematography = r("cinematography_principles");
@@ -1176,6 +1379,8 @@ const shotSplitDef: PromptDefinition = {
       r("camera_directions"),
       "",
       cinematography,
+      "",
+      transitionPolicy,
       "",
       r("language_rules"),
     ].join("\n");
@@ -1258,11 +1463,14 @@ const shotKeyframeAssetsDef: PromptDefinition = {
 
 // ─── 8. frame_generate_first ────────────────────────────
 
-const FIRST_FRAME_STYLE_MATCHING = `=== 关键：画风匹配（最高优先级）===
-仔细阅读下方的角色描述和场景描述。它们指定或暗示了画风。
-你必须精确匹配该画风。不要默认使用写实风格。
-- 如果附有参考图，参考图的视觉风格就是真理——精确匹配
-- 输出的画风必须与角色设定图一致
+const FIRST_FRAME_STYLE_MATCHING = `=== 首帧标准模板总则（最高优先级）===
+你要生成的是“动作开始前的稳定首帧”，它将作为视频的视觉起点。
+- 只写自然中文散文，2-4句，禁止结构化标签（如 Scene:/Action:）、禁止权重语法（如“（xx：1.5）”）
+- 必须先判定并锁定画风，再写内容；不得擅自改风格
+- 如果有参考图，参考图风格是最高标准，必须严格继承
+- 不得出现字幕、文字、水印、LOGO、边框
+- 首帧必须是稳定时刻，不要运动中间态或模糊态
+- 若项目风格或描述包含“电影级写实/写实电影摄影/实拍/photorealistic/cinematic realism”，必须锁定写实电影摄影语言，禁止 2.5D、卡通化边缘、动漫线稿质感
 
 ${themeStyleMappingBlock()}
 
@@ -1270,29 +1478,31 @@ ${artStyleBlock()}
 
 ${physicsRealismBlock()}`;
 
-const FIRST_FRAME_REFERENCE_RULES = `=== 参考图（角色设定图）===
-每张附带的参考图是一张角色设定图，展示4个视角（正面、四分之三侧面、侧面、背面）。
-角色的名字印在每张设定图底部——用它来识别对应的角色。
-强制一致性规则：
-- 将设定图中的角色名与场景描述中的角色名对应
-- 服装必须与参考图完全一致——相同的衣物类型、颜色、材质、配饰。不要替换（如不要把青色常服换成龙袍）
-- 面孔、发型、发色、体型、肤色必须精确匹配
-- 参考图中展示的所有配饰（帽子、佩刀、发簪、首饰）必须出现
-- 画风必须与参考图精确匹配`;
+const FIRST_FRAME_REFERENCE_RULES = `=== 首帧标准提示词格式（按顺序组织）===
+请按以下“四段式信息顺序”组织首帧内容（可写成2-4句自然散文，不要列表输出）：
+1) 主体身份与姿态：角色名（视觉标识）+ 身体朝向 + 站/坐/跪/蹲等稳定姿态
+2) 动作与表情：手部位置、视线方向、面部表情（开场状态）
+3) 构图与镜头：景别（全景/中景/近景/特写）+ 角度（平视/仰拍/俯拍）+ 焦段/透视感
+4) 环境与光影：地点、关键道具、主光方向、色温、氛围细节
 
-const FIRST_FRAME_RENDERING_QUALITY = `=== 渲染 ===
-材质：符合画风的丰富细节
-光线：具有动机的电影级布光。使用轮廓光分离角色。
-背景：完整渲染的详细环境。不要空白或抽象背景。
-角色：精确匹配参考图的外貌和画风。表情生动，姿态自然有动感。
-构图：电影级取景，明确的视觉焦点和景深。`;
+参考图一致性硬约束：
+- 每张角色设定图的角色名必须和画面中的角色一一对应
+- 服装、发型、发色、脸型、体型、肤色、配饰必须与参考图逐项一致
+- 画风与材质语言必须与参考图一致，不得“同角色换风格”`;
 
-const FIRST_FRAME_CONTINUITY_RULES = `=== 连续性要求 ===
-此镜头紧接上一个镜头。附带的参考中包含上一个镜头的尾帧。保持视觉连续性：
-- 相同的角色必须穿着一致的服装和比例
-- 画风相同——不要在动漫和写实之间切换
-- 环境光线和色温应平滑过渡
-- 角色位置应从上一个镜头结束时的位置逻辑延续`;
+const FIRST_FRAME_RENDERING_QUALITY = `=== 首帧渲染质量标准 ===
+- 材质：细节可读，质感与画风一致（布料/金属/皮肤/木石等）
+- 光线：电影级、可解释光源；主次分明，避免平光
+- 背景：完整环境语义，避免抽象空背景
+- 角色：严格匹配参考外观；姿态稳定且可作为视频起点
+- 构图：主体清晰、层次明确、具备景深与视觉焦点`;
+
+const FIRST_FRAME_CONTINUITY_RULES = `=== 连续性要求（仅在存在上一镜头尾帧时生效）===
+此镜头紧接上一个镜头，附带参考中包含上一镜头尾帧。必须做到：
+- 人物延续：服装/比例/体态连续，不跳变
+- 风格延续：画风、材质、线条语言完全一致
+- 光线延续：色温、主光方向、环境亮度平滑衔接
+- 空间延续：角色与道具位置关系可解释地延续到当前首帧`;
 
 const frameGenerateFirstDef: PromptDefinition = {
   key: "frame_generate_first",
@@ -1325,7 +1535,7 @@ const frameGenerateFirstDef: PromptDefinition = {
     lines.push(`=== 场景环境 ===`);
     lines.push(sceneDescription);
     lines.push("");
-    lines.push(`=== 帧描述 ===`);
+    lines.push(`=== 首帧目标描述 ===`);
     lines.push(startFrameDesc);
     lines.push("");
     lines.push(`=== 角色描述 ===`);
@@ -1346,32 +1556,39 @@ const frameGenerateFirstDef: PromptDefinition = {
 
 // ─── 9. frame_generate_last ─────────────────────────────
 
-const LAST_FRAME_STYLE_MATCHING = `=== 关键：画风匹配（最高优先级）===
-你必须精确匹配首帧图像（已附带）的画风。
-如果首帧是动漫/漫画风格 → 此帧也必须是动漫/漫画风格。
-如果首帧是写实风格 → 此帧也必须是写实风格。
-不要改变或混合画风。这是不可协商的。`;
+const LAST_FRAME_STYLE_MATCHING = `=== 尾帧标准模板总则（最高优先级）===
+你要生成的是“动作完成后的稳定尾帧”，它将作为视频终点并可能复用为下一镜头起点。
+- 只写自然中文散文，2-4句，禁止结构化标签与权重语法
+- 画风必须与首帧和参考图完全一致，不允许任何风格漂移
+- 尾帧必须是稳定停驻时刻，禁止运动中间态、动态模糊
+- 不得出现字幕、文字、水印、LOGO、边框
+- 若首帧为电影级写实，尾帧同样必须保持电影级写实，禁止 2.5D/卡通化`;
 
-const LAST_FRAME_RELATIONSHIP_TO_FIRST = `=== 与首帧的关系 ===
-此尾帧展示镜头动作的结束状态。与首帧相比：
-- 相同的环境、布光方案和色彩基调
-- 画风绝对相同——不可有任何变化
-- 服装完全一致——角色穿着与设定图和首帧中完全相同的服装。不可换装。
-- 面孔、发型、配饰相同——只有姿态/表情/位置发生变化
-- 角色的位置、姿态和表情已按帧描述中的说明发生变化`;
+const LAST_FRAME_RELATIONSHIP_TO_FIRST = `=== 尾帧标准提示词格式（按顺序组织）===
+请按以下“四段式信息顺序”组织尾帧内容（可写成2-4句自然散文，不要列表输出）：
+1) 主体身份与终态姿态：角色名（视觉标识）+ 动作结束后的身体姿态与朝向
+2) 终态表情与细节：手部/视线/面部情绪（结果态）
+3) 构图与镜头终态：景别、角度、透视与主体位置（镜头已完成运动）
+4) 环境与光影终态：与首帧同场景同光线体系，仅在动作结果上产生合理变化
 
-const LAST_FRAME_NEXT_SHOT_READINESS = `=== 作为下一个镜头的起始点 ===
-此帧将被复用为下一个镜头的首帧。确保：
-- 姿态是稳定的——不处于运动中间，不模糊
-- 构图完整，可作为独立画面成立
-- 取景允许自然过渡到不同的镜头角度`;
+与首帧关系硬约束：
+- 环境、布光、色彩基调一致
+- 画风一致，不得混风
+- 服装/发型/配饰/体型一致，仅姿态与表情变化
+- 角色位置变化必须符合本镜头动作逻辑`;
 
-const LAST_FRAME_RENDERING_QUALITY = `=== 渲染 ===
-材质：匹配首帧风格的丰富细节
-光线：与首帧相同的布光方案。仅在动作驱动的情况下变化。
-背景：必须匹配首帧的环境。
-角色：精确匹配参考图。展示镜头动作结束时的情感状态。
-构图：镜头的自然收束，为下一个剪辑做好准备。`;
+const LAST_FRAME_NEXT_SHOT_READINESS = `=== 下一镜头可复用性（硬约束）===
+此尾帧可能直接复用为下一镜头首帧，必须满足：
+- 稳定：人物姿态、道具状态、构图都处于“可停驻”状态
+- 完整：画面独立成立，不依赖上下文补全
+- 可衔接：为后续镜头切换保留自然过渡空间（机位/视线/运动方向可承接）`;
+
+const LAST_FRAME_RENDERING_QUALITY = `=== 尾帧渲染质量标准 ===
+- 材质：延续首帧质感等级与风格
+- 光线：与首帧同一布光体系，仅做动作驱动的最小变化
+- 背景：保持同场景语义与空间一致性
+- 角色：严格匹配参考外观，体现动作完成后的情绪结果
+- 构图：画面收束自然，适合直接剪辑`;
 
 const frameGenerateLastDef: PromptDefinition = {
   key: "frame_generate_last",
@@ -1402,7 +1619,7 @@ const frameGenerateLastDef: PromptDefinition = {
     lines.push(`=== 场景环境 ===`);
     lines.push(sceneDescription);
     lines.push("");
-    lines.push(`=== 帧描述 ===`);
+    lines.push(`=== 尾帧目标描述 ===`);
     lines.push(endFrameDesc);
     lines.push("");
     lines.push(`=== 角色描述 ===`);
@@ -1906,6 +2123,9 @@ export const PROMPT_REGISTRY: PromptDefinition[] = [
   characterExtractDef,
   importCharacterExtractDef,
   characterImageDef,
+  scenePropExtractDef,
+  sceneImageDef,
+  propImageDef,
   shotSplitDef,
   shotKeyframeAssetsDef,
   frameGenerateFirstDef,

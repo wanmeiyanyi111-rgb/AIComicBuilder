@@ -20,18 +20,41 @@ export default function ProjectLayout({
   const { id } = use(params);
   const t = useTranslations("common");
   const locale = useLocale();
-  const { project, loading, fetchProject } = useProjectStore();
+  const { project, loading, fetchError, fetchProject } = useProjectStore();
 
   useEffect(() => {
     fetchProject(id);
   }, [id, fetchProject]);
 
-  if (loading || !project) {
+  if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="h-6 w-6 animate-spin text-primary" />
           <p className="text-sm text-[--text-muted]">{t("loading")}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-2xl border border-[--border-subtle] bg-white p-6 text-center">
+          <h2 className="font-display text-xl font-semibold text-[--text-primary]">
+            {fetchError === "not_found" ? "Project not found" : "Failed to load project"}
+          </h2>
+          <p className="mt-2 text-sm text-[--text-secondary]">
+            {fetchError === "not_found"
+              ? "This project may have been moved or reassigned. Return to dashboard and open it again."
+              : (fetchError || "Unknown error")}
+          </p>
+          <Link
+            href={`/${locale}`}
+            className="mt-5 inline-flex h-9 items-center justify-center rounded-lg border border-[--border-subtle] px-4 text-sm text-[--text-primary] transition-all hover:bg-[--surface]"
+          >
+            Back to Dashboard
+          </Link>
         </div>
       </div>
     );

@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
 import { generateText } from "ai";
 import { createLanguageModel, extractJSON } from "@/lib/ai/ai-sdk";
+import { hasTextModelConfig } from "@/lib/ai/config-presence";
 import type { ProviderConfig } from "@/lib/ai/ai-sdk";
-import { db } from "@/lib/db";
-import { projects } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { addImportLog, chunkText } from "@/lib/import-utils";
 import { buildImportCharacterExtractPrompt } from "@/lib/ai/prompts/import-character-extract";
 import { resolvePrompt } from "@/lib/ai/prompts/resolver";
@@ -31,28 +29,24 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: projectId } = await params;
-  const userId = getUserIdFromRequest(request);
-
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(request, projectId);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  const userId = project.userId;
 
   const body = (await request.json()) as {
     text: string;
     modelConfig: { text: ProviderConfig | null };
   };
 
-  if (!body.modelConfig?.text) {
+  if (!hasTextModelConfig(body.modelConfig)) {
     return NextResponse.json({ error: "No text model" }, { status: 400 });
   }
 
   const chunks = chunkText(body.text);
-  const model = createLanguageModel(body.modelConfig.text);
+  const model = createLanguageModel(body.modelConfig?.text);
   const importCharSystem = await resolvePrompt("import_character_extract", { userId, projectId });
 
   await addImportLog(

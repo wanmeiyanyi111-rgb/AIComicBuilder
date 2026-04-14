@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { promptTemplates, promptVersions, projects } from "@/lib/db/schema";
+import { promptTemplates, promptVersions } from "@/lib/db/schema";
 import { and, eq, isNull } from "drizzle-orm";
 import { id as genId } from "@/lib/id";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 
 // PUT: save project-level override (slots mode or full mode)
 export async function PUT(
@@ -11,17 +11,12 @@ export async function PUT(
   { params }: { params: Promise<{ id: string; promptKey: string }> }
 ) {
   const { id, promptKey } = await params;
-  const userId = getUserIdFromRequest(request);
-
-  // Verify project ownership
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, id), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(request, id);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  const userId = project.userId;
 
   const body = (await request.json()) as {
     mode: "slots" | "full";
@@ -154,17 +149,12 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string; promptKey: string }> }
 ) {
   const { id, promptKey } = await params;
-  const userId = getUserIdFromRequest(request);
-
-  // Verify project ownership
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, id), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(request, id);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  const userId = project.userId;
 
   await db
     .delete(promptTemplates)

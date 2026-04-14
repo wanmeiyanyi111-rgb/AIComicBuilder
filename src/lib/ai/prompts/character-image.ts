@@ -1,4 +1,16 @@
-export function buildCharacterTurnaroundPrompt(description: string, characterName?: string): string {
+interface CharacterTurnaroundOptions {
+  projectStyleId?: string | null;
+  projectStyleHint?: string | null;
+}
+
+export function buildCharacterTurnaroundPrompt(
+  description: string,
+  characterName?: string,
+  options?: CharacterTurnaroundOptions
+): string {
+  const styleId = options?.projectStyleId?.trim() || "unspecified";
+  const styleHint = options?.projectStyleHint?.trim() || "";
+
   return `Character four-view reference sheet — professional character design document.
 
 === CRITICAL: ART STYLE FIDELITY ===
@@ -6,11 +18,22 @@ The CHARACTER DESCRIPTION below is authoritative. It may specify an art style ex
 
 Rules for interpreting style:
 1. Treat the FULL style phrase as one atomic instruction. Do NOT cherry-pick individual words and map them to a default bucket. "3D 写实国漫渲染" is NOT the same as "photorealistic" — it is a stylized 3D CG render in the Chinese animation idiom.
-2. Style modifiers like "写实 / realistic / 高清 / 精致" describe RENDERING FIDELITY, not medium. They raise detail level within the chosen medium; they never convert the medium to live-action photography.
-3. The medium (2D illustration / 3D CG / photograph / painting / pixel / etc.) is determined ONLY by explicit medium words such as "照片 / photograph / live-action / 真人实拍 / 摄影". In the ABSENCE of such explicit photographic words, DO NOT output a photograph or live-action render, even if "写实" or "realistic" appears.
-4. When multiple style words are present, the most specific / most restrictive one wins. "国漫" + "3D" + "写实" → stylized 3D CG in Chinese animation style with high rendering fidelity.
-5. Color palette, lighting mood, and era references in the description (e.g. "低饱和度暗沉色调", "电影级历史正剧质感") are MANDATORY and must be honored exactly — they are not decorative.
-6. If no style is mentioned at all, infer the most appropriate stylized illustration from the character's setting and genre. Default to stylized illustration, NOT photography.
+2. Style modifiers like "写实 / realistic / 高清 / 精致" usually raise rendering fidelity inside the chosen medium. HOWEVER, when they appear as explicit cinematic realism phrases (e.g. "电影级写实", "写实电影摄影", "photorealistic", "cinematic realism", "live-action look"), treat them as explicit photoreal/live-action intent.
+3. Photoreal/live-action cues include: "电影级写实 / 写实电影 / 写实电影摄影 / 真人 / 真人实拍 / 实拍 / 照片级 / photograph / photorealistic / photo-realistic / cinematic realism / live-action / film still / 摄影". If these cues appear AND there is no stronger conflicting medium keyword, lock output to live-action photoreal cinematic rendering.
+4. Conflicting medium rule: if explicit non-photographic medium words exist ("动漫 / anime / manga / 国漫 / cartoon / cel-shaded / watercolor / oil painting / pixel art / stylized 3D / 2.5D"), obey the most specific complete phrase from the description. Never invent a new medium.
+5. If no style is mentioned at all, infer the most appropriate stylized illustration from the character's setting and genre. Default to stylized illustration, NOT photography.
+6. Color palette, lighting mood, and era references in the description (e.g. "低饱和度暗沉色调", "电影级历史正剧质感") are MANDATORY and must be honored exactly — they are not decorative.
+
+=== PROJECT STYLE LOCK (higher priority than theme inference) ===
+Project style id: ${styleId}
+${styleHint ? `Project style hint: ${styleHint}` : "Project style hint: (not provided)"}
+If project style or description indicates cinematic realism (especially style id "cinematic_realism"), keep a strict live-action cinematic look:
+- no anime linework
+- no cel shading
+- no toon rendering
+- no 2.5D stylized look
+- no exaggerated cartoon proportions
+- if legacy style words conflict (e.g. accidental "国漫/3D/2.5D" drift tags), prioritize project style lock unless the current request explicitly demands a stylized medium as final target
 
 === CHARACTER DESCRIPTION (authoritative) ===
 ${characterName ? `Name: ${characterName}\n` : ''}${description}
@@ -40,6 +63,7 @@ Four views arranged LEFT to RIGHT on a clean pure white canvas, consistent mediu
 - Pure white background for clean character separation
 - Honor any mood/tone/palette constraints from the description (if it says "低饱和度暗沉", the output MUST be low-saturation and muted, NOT bright)
 - Highest quality achievable WITHIN the chosen medium and style — never break medium to chase fidelity
+- If cinematic realism is requested, lighting, skin, lens behavior and materials must look physically plausible like a real film still
 
 === CONSISTENCY ACROSS ALL FOUR VIEWS ===
 - Identical character identity, proportions and colors in every view

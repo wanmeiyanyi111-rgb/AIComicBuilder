@@ -14,6 +14,9 @@ export interface Episode {
   generationMode: "keyframe" | "reference";
   finalVideoUrl: string | null;
   previewImages?: string[];
+  characters?: string[];
+  scenes?: string[];
+  props?: string[];
   createdAt: string | number;
   updatedAt: string | number;
 }

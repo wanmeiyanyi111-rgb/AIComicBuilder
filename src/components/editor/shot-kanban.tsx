@@ -72,6 +72,7 @@ export function ShotKanban({
 }: ShotKanbanProps) {
   const t = useTranslations("project");
   const tCommon = useTranslations("common");
+  const tStoryboard = useTranslations("storyboard");
 
   const frameShots = shots.filter((s) => classifyShot(s, generationMode) === "frames");
   const promptShots = shots.filter((s) => classifyShot(s, generationMode) === "prompt");
@@ -169,6 +170,11 @@ export function ShotKanban({
             ) : (
               col.shots.map((shot) => {
                 const thumb = getFirstFrameUrl(shot) || getSceneRefFrameUrl(shot) || getLastFrameUrl(shot);
+                const chainIndex = shot.chainIndex ?? 1;
+                const chainTotal = shot.chainTotal ?? 1;
+                const isSegmentedChain = chainTotal > 1;
+                const hasTailFrameContinuity =
+                  isSegmentedChain && shot.inheritPrevLastFrame === 1 && !!shot.prevShotId;
                 return (
                   <div
                     key={shot.id}
@@ -192,6 +198,18 @@ export function ShotKanban({
                     <div className="min-w-0 flex-1">
                       <div className="text-[10px] font-mono font-bold text-primary">#{shot.sequence}</div>
                       <div className="truncate text-[11px] text-[--text-secondary]">{shot.prompt}</div>
+                      {isSegmentedChain && (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700">
+                            {tStoryboard("segmentBadge", { index: chainIndex, total: chainTotal })}
+                          </span>
+                          {hasTailFrameContinuity && (
+                            <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                              {tStoryboard("tailFrameLinkBadge")}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );

@@ -31,6 +31,13 @@ interface SplitEpisode {
   keywords: string;
   idea: string;
   characters?: string[];
+  scenes?: string[];
+  props?: string[];
+}
+
+interface ScenePropCandidate {
+  name: string;
+  prompt: string;
 }
 
 interface LogEntry {
@@ -42,13 +49,14 @@ interface LogEntry {
   createdAt: string | number;
 }
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2 | 3 | 4 | 5;
 
 const STEPS = [
   { num: 1 as Step, icon: FileText, label: "importStep.parse" },
   { num: 2 as Step, icon: Users, label: "importStep.characters" },
-  { num: 3 as Step, icon: Layers, label: "importStep.split" },
-  { num: 4 as Step, icon: Sparkles, label: "importStep.generate" },
+  { num: 3 as Step, icon: Layers, label: "importStep.sceneProps" },
+  { num: 4 as Step, icon: Layers, label: "importStep.split" },
+  { num: 5 as Step, icon: Sparkles, label: "importStep.generate" },
 ] as const;
 
 export default function ImportPage({
@@ -67,7 +75,7 @@ export default function ImportPage({
   // Pipeline state
   const [currentStep, setCurrentStep] = useState<Step | 0>(0);
   const [stepStatus, setStepStatus] = useState<Record<Step, "idle" | "running" | "done" | "error">>({
-    1: "idle", 2: "idle", 3: "idle", 4: "idle",
+    1: "idle", 2: "idle", 3: "idle", 4: "idle", 5: "idle",
   });
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
@@ -83,6 +91,8 @@ export default function ImportPage({
   // Step 2 result
   const [characters, setCharacters] = useState<ExtractedCharacter[]>([]);
   const [relationships, setRelationships] = useState<Array<{ characterA: string; characterB: string; relationType: string; description?: string }>>([]);
+  const [sceneCandidates, setSceneCandidates] = useState<ScenePropCandidate[]>([]);
+  const [propCandidates, setPropCandidates] = useState<ScenePropCandidate[]>([]);
 
   // Step 3 result
   const [episodes, setEpisodes] = useState<SplitEpisode[]>([]);
@@ -104,12 +114,12 @@ export default function ImportPage({
           const doneSteps = data.filter((l: LogEntry) => l.status === "done").map((l: LogEntry) => l.step);
           const maxDone = Math.max(0, ...doneSteps) as Step | 0;
           setCurrentStep(maxDone);
-          for (let s = 1; s <= 4; s++) {
+          for (let s = 1; s <= 5; s++) {
             const stepLogs = data.filter((l: LogEntry) => l.step === s);
             if (stepLogs.some((l: LogEntry) => l.status === "error")) {
-              setStepStatus((prev) => ({ ...prev, [s]: "error" }));
+              setStepStatus((prev) => ({ ...prev, [s as Step]: "error" }));
             } else if (stepLogs.some((l: LogEntry) => l.status === "done")) {
-              setStepStatus((prev) => ({ ...prev, [s]: "done" }));
+              setStepStatus((prev) => ({ ...prev, [s as Step]: "done" }));
             }
           }
         }
@@ -125,10 +135,14 @@ export default function ImportPage({
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  const addLog = useCallback((step: Step, status: LogEntry["status"], message: string) => {
+  const addLog = useCallback((step: Step, status: LogEntry["status"], message: string, metadata?: unknown) => {
+    const randomId =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setLogs((prev) => [
       ...prev,
-      { id: Date.now().toString(), step, status, message, createdAt: Date.now() },
+      { id: randomId, step, status, message, metadata, createdAt: Date.now() },
     ]);
   }, []);
 
@@ -185,6 +199,7 @@ export default function ImportPage({
     setStepStatus((prev) => ({ ...prev, 2: "running" }));
     addLog(2, "running", "开始角色提取...");
 
+    let extractedCharacters: ExtractedCharacter[] = [];
     try {
       const res = await apiFetch(`/api/projects/${projectId}/import/characters`, {
         method: "POST",
@@ -198,9 +213,13 @@ export default function ImportPage({
       const data = await res.json();
       setCharacters(data.characters);
       setRelationships(data.relationships || []);
+      extractedCharacters = data.characters || [];
       const mainCount = data.characters.filter((c: ExtractedCharacter) => c.scope === "main").length;
       const guestCount = data.characters.length - mainCount;
-      addLog(2, "done", `提取完成: ${mainCount} 个主角, ${guestCount} 个配角`);
+      addLog(2, "done", `提取完成: ${mainCount} 个主角, ${guestCount} 个配角`, {
+        characters: data.characters,
+        relationships: data.relationships || [],
+      });
       setStepStatus((prev) => ({ ...prev, 2: "done" }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Extract failed";
@@ -208,6 +227,11 @@ export default function ImportPage({
       setStepStatus((prev) => ({ ...prev, 2: "error" }));
       return;
     }
+
+    const assets = await runScenePropExtract(text);
+    if (!assets) return;
+
+    await runSplit(text, extractedCharacters, assets.scenes, assets.props);
   }
 
   // ── Step 2 only: Retry character extraction ──
@@ -231,10 +255,18 @@ export default function ImportPage({
       const data = await res.json();
       setCharacters(data.characters);
       setRelationships(data.relationships || []);
+      const extractedCharacters = (data.characters || []) as ExtractedCharacter[];
       const mainCount = data.characters.filter((c: ExtractedCharacter) => c.scope === "main").length;
       const guestCount = data.characters.length - mainCount;
-      addLog(2, "done", `提取完成: ${mainCount} 个主角, ${guestCount} 个配角`);
+      addLog(2, "done", `提取完成: ${mainCount} 个主角, ${guestCount} 个配角`, {
+        characters: data.characters,
+        relationships: data.relationships || [],
+      });
       setStepStatus((prev) => ({ ...prev, 2: "done" }));
+
+      const assets = await runScenePropExtract(fullText);
+      if (!assets) return;
+      await runSplit(fullText, extractedCharacters, assets.scenes, assets.props);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Extract failed";
       addLog(2, "error", `角色提取失败: ${msg}`);
@@ -242,21 +274,74 @@ export default function ImportPage({
     }
   }
 
-  // ── Step 3: Split (triggered by user after reviewing characters) ──
-  async function runSplit() {
-    if (!textGuard()) return;
+  async function runScenePropExtract(sourceText: string): Promise<{ scenes: ScenePropCandidate[]; props: ScenePropCandidate[] } | null> {
+    if (!textGuard()) return null;
 
     setCurrentStep(3);
     setStepStatus((prev) => ({ ...prev, 3: "running" }));
-    addLog(3, "running", "开始自动分集...");
+    addLog(3, "running", "开始提取场景和道具候选...");
+
+    try {
+      const res = await apiFetch(`/api/projects/${projectId}/visual-assets/extract-candidates`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          modelConfig: getModelConfig(),
+          maxScenes: 12,
+          maxProps: 20,
+          refreshExisting: true,
+          // use imported script text as source context
+          text: sourceText,
+          importMode: true,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      const scenes = (data.scenes || []) as ScenePropCandidate[];
+      const props = (data.props || []) as ScenePropCandidate[];
+      setSceneCandidates(scenes);
+      setPropCandidates(props);
+      addLog(
+        3,
+        "done",
+        `提取完成: ${scenes.length} 个场景候选, ${props.length} 个道具候选`,
+        { scenes, props }
+      );
+      setStepStatus((prev) => ({ ...prev, 3: "done" }));
+      return { scenes, props };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Scene/prop extract failed";
+      addLog(3, "error", `场景/道具提取失败: ${msg}`);
+      setStepStatus((prev) => ({ ...prev, 3: "error" }));
+      return null;
+    }
+  }
+
+  // ── Step 4: Split ──
+  async function runSplit(
+    textInput = fullText,
+    characterInput = characters,
+    sceneInput = sceneCandidates,
+    propInput = propCandidates
+  ) {
+    if (!textGuard()) return;
+
+    setCurrentStep(4);
+    setStepStatus((prev) => ({ ...prev, 4: "running" }));
+    addLog(4, "running", "开始自动分集...");
 
     try {
       const res = await apiFetch(`/api/projects/${projectId}/import/split`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          text: fullText,
-          allCharacters: characters.map((c) => ({ name: c.name, scope: c.scope })),
+          text: textInput,
+          allCharacters: characterInput.map((c) => ({ name: c.name, scope: c.scope })),
+          sceneCandidates: sceneInput.map((s) => ({ name: s.name })),
+          propCandidates: propInput.map((p) => ({ name: p.name })),
           modelConfig: getModelConfig(),
         }),
       });
@@ -266,20 +351,22 @@ export default function ImportPage({
       }
       const data = await res.json();
       setEpisodes(data.episodes);
-      addLog(3, "done", `分集完成，共 ${data.episodes.length} 集`);
-      setStepStatus((prev) => ({ ...prev, 3: "done" }));
+      addLog(4, "done", `分集完成，共 ${data.episodes.length} 集`, {
+        episodes: data.episodes,
+      });
+      setStepStatus((prev) => ({ ...prev, 4: "done" }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Split failed";
-      addLog(3, "error", `分集失败: ${msg}`);
-      setStepStatus((prev) => ({ ...prev, 3: "error" }));
+      addLog(4, "error", `分集失败: ${msg}`);
+      setStepStatus((prev) => ({ ...prev, 4: "error" }));
     }
   }
 
-  // ── Step 4: Generate (triggered by user after reviewing episodes) ──
+  // ── Step 5: Generate (triggered by user after reviewing episodes) ──
   async function runGenerate() {
-    setCurrentStep(4);
-    setStepStatus((prev) => ({ ...prev, 4: "running" }));
-    addLog(4, "running", `创建 ${episodes.length} 集和角色...`);
+    setCurrentStep(5);
+    setStepStatus((prev) => ({ ...prev, 5: "running" }));
+    addLog(5, "running", `创建 ${episodes.length} 集、角色与每集资产...`);
 
     try {
       const res = await apiFetch(`/api/projects/${projectId}/import/generate`, {
@@ -289,6 +376,8 @@ export default function ImportPage({
           episodes,
           characters,
           relationships,
+          sceneCandidates,
+          propCandidates,
         }),
       });
       if (!res.ok) {
@@ -296,22 +385,26 @@ export default function ImportPage({
         throw new Error(err.error || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      addLog(4, "done", `导入完成！创建了 ${data.characterCount} 个角色和 ${data.episodes.length} 集`);
-      setStepStatus((prev) => ({ ...prev, 4: "done" }));
+      addLog(
+        5,
+        "done",
+        `导入完成！创建了 ${data.characterCount} 个角色和 ${data.episodes.length} 集（${data.visualAssetCount || 0} 个场景/道具）`
+      );
+      setStepStatus((prev) => ({ ...prev, 5: "done" }));
       toast.success(t("complete"));
       setTimeout(() => {
         router.push(`/${locale}/project/${projectId}/episodes`);
       }, 1500);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Generate failed";
-      addLog(4, "error", `创建失败: ${msg}`);
-      setStepStatus((prev) => ({ ...prev, 4: "error" }));
+      addLog(5, "error", `创建失败: ${msg}`);
+      setStepStatus((prev) => ({ ...prev, 5: "error" }));
     }
   }
 
   // Retry handler for any failed step
   function retryStep() {
-    const failedStep = ([1, 2, 3, 4] as Step[]).find((s) => stepStatus[s] === "error");
+    const failedStep = ([1, 2, 3, 4, 5] as Step[]).find((s) => stepStatus[s] === "error");
     if (!failedStep) return;
     switch (failedStep) {
       case 1: // Re-run full pipeline (need file again)
@@ -321,9 +414,17 @@ export default function ImportPage({
         retryCharacterExtract();
         break;
       case 3:
-        runSplit();
+        if (fullText) {
+          runScenePropExtract(fullText).then((assets) => {
+            if (!assets) return;
+            runSplit(fullText, characters, assets.scenes, assets.props);
+          });
+        }
         break;
       case 4:
+        runSplit();
+        break;
+      case 5:
         runGenerate();
         break;
     }
@@ -369,10 +470,10 @@ export default function ImportPage({
     return base;
   };
 
-  // Show characters review after step 2 done + step 3 idle
-  const showCharReview = stepStatus[2] === "done" && stepStatus[3] === "idle" && !historyMode;
-  // Show episodes review after step 3 done + step 4 idle
-  const showEpReview = stepStatus[3] === "done" && stepStatus[4] === "idle" && !historyMode;
+  // Pipeline now auto-runs parse -> characters -> scene/prop -> split.
+  const showCharReview = false;
+  // Show episodes review after split done and before final create.
+  const showEpReview = stepStatus[4] === "done" && stepStatus[5] === "idle" && !historyMode;
 
   return (
     <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden">
@@ -489,7 +590,7 @@ export default function ImportPage({
               <h3 className="font-display text-lg font-bold text-[--text-primary]">
                 {t("reviewCharacters")}
               </h3>
-              <Button onClick={runSplit} className="rounded-xl">
+              <Button onClick={() => runSplit()} className="rounded-xl">
                 {t("confirmAndSplit")}
               </Button>
             </div>
@@ -597,6 +698,30 @@ export default function ImportPage({
                       })}
                     </div>
                   )}
+                  {ep.scenes && ep.scenes.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {ep.scenes.map((name) => (
+                        <span
+                          key={`scene-${name}`}
+                          className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-600"
+                        >
+                          场景·{name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {ep.props && ep.props.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {ep.props.map((name) => (
+                        <span
+                          key={`prop-${name}`}
+                          className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+                        >
+                          道具·{name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   {ep.keywords && (
                     <div className="mt-2 flex flex-wrap gap-1">
                       {ep.keywords.split(/[,，]/).map((kw) => kw.trim()).filter(Boolean).map((kw) => (
@@ -625,9 +750,11 @@ export default function ImportPage({
           const meta = stepDoneLog?.metadata as Record<string, unknown> | null;
           const metaCharacters = meta?.characters as ExtractedCharacter[] | undefined;
           const metaEpisodes = meta?.episodes as SplitEpisode[] | undefined;
+          const metaScenes = meta?.scenes as ScenePropCandidate[] | undefined;
+          const metaProps = meta?.props as ScenePropCandidate[] | undefined;
 
-          // For step 3, also show characters from step 2
-          const step2DoneLog = (selectedStep === 3)
+          // For split step, also show characters from step 2
+          const step2DoneLog = (selectedStep === 4)
             ? logs.find((l) => l.step === 2 && l.status === "done" && l.metadata)
             : null;
           const step2Meta = step2DoneLog?.metadata as Record<string, unknown> | null;
@@ -656,8 +783,8 @@ export default function ImportPage({
 
               <div className="rounded-xl border border-[--border-subtle] bg-white p-4">
                 <div className="max-h-[30vh] space-y-1.5 overflow-y-auto font-mono text-xs">
-                  {filteredLogs.map((log) => (
-                    <div key={log.id} className="flex items-start gap-2">
+                  {filteredLogs.map((log, idx) => (
+                    <div key={`${log.id}-${log.createdAt}-${idx}`} className="flex items-start gap-2">
                       <span
                         className={`mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full ${
                           log.status === "done"
@@ -680,7 +807,7 @@ export default function ImportPage({
               </div>
 
               {/* Retry button when a step has failed */}
-              {([1, 2, 3, 4] as Step[]).some((s) => stepStatus[s] === "error") && !historyMode && (
+              {([1, 2, 3, 4, 5] as Step[]).some((s) => stepStatus[s] === "error") && !historyMode && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -744,8 +871,48 @@ export default function ImportPage({
                 </div>
               )}
 
-              {/* Step 3 metadata: episodes */}
-              {selectedStep === 3 && metaEpisodes && metaEpisodes.length > 0 && (
+              {/* Step 3 metadata: scene/prop candidates */}
+              {selectedStep === 3 && ((metaScenes && metaScenes.length > 0) || (metaProps && metaProps.length > 0) || sceneCandidates.length > 0 || propCandidates.length > 0) && (
+                <div className="space-y-3">
+                  {(metaScenes?.length || sceneCandidates.length) > 0 && (
+                    <div>
+                      <h4 className="mb-2 text-sm font-medium text-[--text-secondary]">
+                        场景候选 ({metaScenes?.length || sceneCandidates.length})
+                      </h4>
+                      <div className="flex flex-wrap gap-1">
+                        {(metaScenes || sceneCandidates).map((scene) => (
+                          <span
+                            key={`scene-candidate-${scene.name}`}
+                            className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-600"
+                          >
+                            {scene.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(metaProps?.length || propCandidates.length) > 0 && (
+                    <div>
+                      <h4 className="mb-2 text-sm font-medium text-[--text-secondary]">
+                        道具候选 ({metaProps?.length || propCandidates.length})
+                      </h4>
+                      <div className="flex flex-wrap gap-1">
+                        {(metaProps || propCandidates).map((prop) => (
+                          <span
+                            key={`prop-candidate-${prop.name}`}
+                            className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+                          >
+                            {prop.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Step 4 metadata: episodes */}
+              {selectedStep === 4 && metaEpisodes && metaEpisodes.length > 0 && (
                 <div>
                   <h4 className="mb-2 text-sm font-medium text-[--text-secondary]">
                     {t("reviewEpisodes")} ({metaEpisodes.length})
@@ -772,6 +939,30 @@ export default function ImportPage({
                             })}
                           </div>
                         )}
+                        {ep.scenes && ep.scenes.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {ep.scenes.map((name) => (
+                              <span
+                                key={`meta-scene-${name}`}
+                                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-600"
+                              >
+                                场景·{name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {ep.props && ep.props.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {ep.props.map((name) => (
+                              <span
+                                key={`meta-prop-${name}`}
+                                className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"
+                              >
+                                道具·{name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -787,7 +978,7 @@ export default function ImportPage({
                       setHistoryMode(false);
                       setSelectedStep(null);
                       setCurrentStep(0);
-                      setStepStatus({ 1: "idle", 2: "idle", 3: "idle", 4: "idle" });
+                      setStepStatus({ 1: "idle", 2: "idle", 3: "idle", 4: "idle", 5: "idle" });
                     }}
                   >
                     {t("newImport")}

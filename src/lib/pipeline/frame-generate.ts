@@ -1,5 +1,12 @@
 import { db } from "@/lib/db";
-import { shots, characters, projects, episodes, characterCostumes } from "@/lib/db/schema";
+import {
+  shots,
+  characters,
+  projects,
+  episodes,
+  characterCostumes,
+  visualAssets,
+} from "@/lib/db/schema";
 import { resolveImageProvider } from "@/lib/ai/provider-factory";
 import type { ModelConfigPayload } from "@/lib/ai/provider-factory";
 import {
@@ -7,9 +14,114 @@ import {
   buildLastFramePrompt,
 } from "@/lib/ai/prompts/frame-generate";
 import { resolveSlotContents } from "@/lib/ai/prompts/resolver";
-import { eq, and, lt, desc } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Task } from "@/lib/task-queue";
 import { getActiveAsset, insertAssetVersion, patchAsset } from "@/lib/shot-asset-utils";
+
+const MAX_FRAME_REFERENCE_IMAGES = 4;
+const MAX_SCENE_PROP_REFERENCE_IMAGES = 2;
+
+type NamedImageRef = {
+  path: string;
+  label: string;
+};
+
+type VisualAssetRef = {
+  episodeId: string | null;
+  type: "scene" | "prop";
+  name: string;
+  imageUrl: string;
+};
+
+function buildShotReferenceContext(parts: Array<string | null | undefined>): string {
+  return parts
+    .map((part) => (part || "").toLowerCase().trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+function dedupeNamedRefs(refs: NamedImageRef[]): NamedImageRef[] {
+  const seen = new Set<string>();
+  const output: NamedImageRef[] = [];
+  for (const ref of refs) {
+    const key = ref.path.trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(ref);
+  }
+  return output;
+}
+
+function summarizeRefLabels(refs: NamedImageRef[]): string {
+  return refs.map((ref) => ref.label).join(" | ") || "none";
+}
+
+function composeFirstFrameRefs(
+  charRefs: NamedImageRef[],
+  scenePropRefs: NamedImageRef[]
+): NamedImageRef[] {
+  const ordered: NamedImageRef[] = [];
+  if (scenePropRefs[0]) ordered.push(scenePropRefs[0]);
+  if (charRefs[0]) ordered.push(charRefs[0]);
+  if (scenePropRefs[1]) ordered.push(scenePropRefs[1]);
+  if (charRefs[1]) ordered.push(charRefs[1]);
+  ordered.push(...charRefs.slice(2), ...scenePropRefs.slice(2));
+  return dedupeNamedRefs(ordered).slice(0, MAX_FRAME_REFERENCE_IMAGES);
+}
+
+function composeLastFrameRefs(
+  firstFramePath: string,
+  charRefs: NamedImageRef[],
+  scenePropRefs: NamedImageRef[]
+): NamedImageRef[] {
+  const ordered: NamedImageRef[] = [
+    { path: firstFramePath, label: "首帧/First Frame" },
+    ...composeFirstFrameRefs(charRefs, scenePropRefs),
+  ];
+  return dedupeNamedRefs(ordered).slice(0, MAX_FRAME_REFERENCE_IMAGES);
+}
+
+function pickScenePropRefsForShot(
+  pool: VisualAssetRef[],
+  context: string
+): NamedImageRef[] {
+  if (pool.length === 0) return [];
+
+  const ranked = pool
+    .map((asset) => ({
+      ...asset,
+      score: context.includes(asset.name.toLowerCase()) ? 100 : 0,
+    }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (a.type !== b.type) return a.type === "scene" ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+
+  const preferred = ranked.some((item) => item.score > 0)
+    ? ranked.filter((item) => item.score > 0)
+    : ranked;
+
+  const picked: typeof preferred = [];
+  const takeOne = (type: "scene" | "prop") => {
+    const found = preferred.find(
+      (item) => item.type === type && !picked.includes(item)
+    );
+    if (found) picked.push(found);
+  };
+  takeOne("scene");
+  takeOne("prop");
+  for (const item of preferred) {
+    if (picked.includes(item)) continue;
+    picked.push(item);
+    if (picked.length >= MAX_SCENE_PROP_REFERENCE_IMAGES) break;
+  }
+
+  return picked.slice(0, MAX_SCENE_PROP_REFERENCE_IMAGES).map((item) => ({
+    path: item.imageUrl,
+    label: item.type === "scene" ? `场景:${item.name}` : `道具:${item.name}`,
+  }));
+}
 
 export async function handleFrameGenerate(task: Task) {
   const payload = task.payload as {
@@ -58,18 +170,6 @@ export async function handleFrameGenerate(task: Task) {
     characterDescParts.push(desc);
   }
   const characterDescriptions = characterDescParts.join("\n");
-
-  const [previousShot] = await db
-    .select()
-    .from(shots)
-    .where(
-      and(
-        eq(shots.projectId, payload.projectId),
-        lt(shots.sequence, shot.sequence)
-      )
-    )
-    .orderBy(desc(shots.sequence))
-    .limit(1);
 
   const ai = resolveImageProvider(payload.modelConfig);
 
@@ -147,32 +247,103 @@ export async function handleFrameGenerate(task: Task) {
       ? charsWithRefs.filter((c) => storedCharNames.includes(c.name))
       : charsWithRefs.slice(0, 3);
   const charRefImages = relevantChars.map((c) => c.referenceImage as string);
+  const shotCharRefs: NamedImageRef[] = relevantChars.map((c) => ({
+    path: c.referenceImage as string,
+    label: `角色:${c.name}`,
+  }));
 
-  console.log(`[FrameGenerate] Shot ${shot.sequence}: using ${relevantChars.length} chars: ${relevantChars.map(c => c.name).join(", ") || "fallback"}`);
+  const allVisualAssetRows = await db
+    .select({
+      episodeId: visualAssets.episodeId,
+      type: visualAssets.type,
+      name: visualAssets.name,
+      imageUrl: visualAssets.imageUrl,
+      status: visualAssets.status,
+    })
+    .from(visualAssets)
+    .where(eq(visualAssets.projectId, payload.projectId));
+  const visualPool: VisualAssetRef[] = allVisualAssetRows
+    .filter(
+      (row): row is typeof row & { imageUrl: string } =>
+        row.status === "completed" &&
+        !!row.imageUrl &&
+        (!row.episodeId || row.episodeId === shot.episodeId)
+    )
+    .map((row) => ({
+      episodeId: row.episodeId,
+      type: row.type,
+      name: row.name,
+      imageUrl: row.imageUrl,
+    }));
+  const shotContext = buildShotReferenceContext([
+    shot.prompt,
+    shot.motionScript,
+    shot.videoScript,
+    startFrameDescText,
+    endFrameDescText,
+  ]);
+  const shotScenePropRefs = pickScenePropRefsForShot(visualPool, shotContext);
+  const firstFrameRefs = composeFirstFrameRefs(shotCharRefs, shotScenePropRefs);
+
+  console.log(
+    `[FrameGenerate] Shot ${shot.sequence} ref pick -> chars=${summarizeRefLabels(
+      shotCharRefs
+    )}; scene/prop=${summarizeRefLabels(shotScenePropRefs)}; first=${summarizeRefLabels(
+      firstFrameRefs
+    )}`
+  );
+
+  const forceChainContinuity =
+    shot.inheritPrevLastFrame === 1 && !!shot.prevShotId;
 
   // Mark assets as generating
-  if (firstFrameAsset) await patchAsset(firstFrameAsset.id, { status: "generating" });
+  if (firstFrameAsset && !forceChainContinuity) {
+    await patchAsset(firstFrameAsset.id, { status: "generating" });
+  }
   if (lastFrameAsset) await patchAsset(lastFrameAsset.id, { status: "generating" });
 
-  // For visual continuity, look up the previous shot's last_frame asset.
-  const prevLastFrameUrl = previousShot
-    ? (await getActiveAsset(previousShot.id, "last_frame", 0))?.fileUrl ?? undefined
+  // Continuity source is only valid for segmented chain shots.
+  // Normal shots must NOT consume previous shot tail frames.
+  const continuitySourceShotId = forceChainContinuity ? shot.prevShotId : undefined;
+  const prevLastFrameUrl = continuitySourceShotId
+    ? (await getActiveAsset(continuitySourceShotId, "last_frame", 0))?.fileUrl ??
+      undefined
     : undefined;
 
-  // Generate first frame
-  let firstFramePrompt = buildFirstFramePrompt({
-    sceneDescription: shot.prompt || "",
-    startFrameDesc: startFrameDescText,
-    characterDescriptions,
-    previousLastFrame: prevLastFrameUrl ?? undefined,
-    slotContents: frameFirstSlots,
-  });
-  if (compositionSuffix) firstFramePrompt += compositionSuffix;
-  const firstFramePath = await ai.generateImage(firstFramePrompt, {
-    quality: "hd",
-    referenceImages: charRefImages,
-  });
+  let firstFramePath = "";
+  if (forceChainContinuity) {
+    if (!prevLastFrameUrl) {
+      throw new Error(
+        `Shot ${shot.sequence} requires previous last frame for continuity, but prev shot (${shot.prevShotId}) has no last frame`
+      );
+    }
+    firstFramePath = prevLastFrameUrl;
+    console.log(
+      `[FrameGenerate] Shot ${shot.sequence}: reused previous shot last frame as first frame (${shot.prevShotId})`
+    );
+  } else {
+    // Generate first frame
+    let firstFramePrompt = buildFirstFramePrompt({
+      sceneDescription: shot.prompt || "",
+      startFrameDesc: startFrameDescText,
+      characterDescriptions,
+      // Keep normal shots independent; tail-frame continuity is chain-only.
+      previousLastFrame: undefined,
+      slotContents: frameFirstSlots,
+    });
+    if (compositionSuffix) firstFramePrompt += compositionSuffix;
+    firstFramePath = await ai.generateImage(firstFramePrompt, {
+      quality: "hd",
+      referenceImages: firstFrameRefs.map((ref) => ref.path),
+      referenceLabels: firstFrameRefs.map((ref) => ref.label),
+    });
+  }
 
+  const lastFrameRefs = composeLastFrameRefs(
+    firstFramePath,
+    shotCharRefs,
+    shotScenePropRefs
+  );
   // Generate last frame
   let lastFramePrompt = buildLastFramePrompt({
     sceneDescription: shot.prompt || "",
@@ -184,7 +355,8 @@ export async function handleFrameGenerate(task: Task) {
   if (compositionSuffix) lastFramePrompt += compositionSuffix;
   const lastFramePath = await ai.generateImage(lastFramePrompt, {
     quality: "hd",
-    referenceImages: [firstFramePath, ...charRefImages],
+    referenceImages: lastFrameRefs.map((ref) => ref.path),
+    referenceLabels: lastFrameRefs.map((ref) => ref.label),
   });
 
   // Patch asset rows with the resulting file URLs (or insert if they didn't
@@ -194,6 +366,12 @@ export async function handleFrameGenerate(task: Task) {
     await patchAsset(firstFrameAsset.id, {
       fileUrl: firstFramePath,
       status: "completed",
+      meta: forceChainContinuity
+        ? {
+            continuity: "inherit_prev_last_frame",
+            sourceShotId: shot.prevShotId,
+          }
+        : undefined,
     });
   } else {
     await insertAssetVersion({
@@ -204,6 +382,12 @@ export async function handleFrameGenerate(task: Task) {
       fileUrl: firstFramePath,
       status: "completed",
       characters: relevantChars.map((c) => c.name),
+      meta: forceChainContinuity
+        ? {
+            continuity: "inherit_prev_last_frame",
+            sourceShotId: shot.prevShotId,
+          }
+        : undefined,
     });
   }
   if (lastFrameAsset) {

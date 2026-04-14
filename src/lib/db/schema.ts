@@ -15,6 +15,7 @@ export const projects = sqliteTable("projects", {
   finalVideoUrl: text("final_video_url"),
   generationMode: text('generation_mode', { enum: ['keyframe', 'reference'] }).notNull().default('keyframe'),
   useProjectPrompts: integer("use_project_prompts").notNull().default(0),
+  styleId: text("style_id").default(""),
   colorPalette: text("color_palette").default(""),
   worldSetting: text("world_setting").default(""),
   targetDuration: integer("target_duration").default(0),
@@ -197,6 +198,12 @@ export const shots = sqliteTable("shots", {
     onDelete: "cascade",
   }),
   sceneId: text("scene_id"),
+  chainGroupId: text("chain_group_id"),
+  chainIndex: integer("chain_index").notNull().default(1),
+  chainTotal: integer("chain_total").notNull().default(1),
+  prevShotId: text("prev_shot_id"),
+  inheritPrevLastFrame: integer("inherit_prev_last_frame").notNull().default(0),
+  originalDuration: integer("original_duration").notNull().default(0),
   compositionGuide: text("composition_guide").default(""),
   focalPoint: text("focal_point").default(""),
   depthOfField: text("depth_of_field").default("medium"),
@@ -320,6 +327,36 @@ export const moodBoardImages = sqliteTable("mood_board_images", {
   annotation: text("annotation").default(""),
   extractedStyle: text("extracted_style").default(""),
   createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
+export const visualAssets = sqliteTable("visual_assets", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  episodeId: text("episode_id").references(() => episodes.id, {
+    onDelete: "cascade",
+  }),
+  type: text("type", { enum: ["scene", "prop"] })
+    .notNull()
+    .default("scene"),
+  name: text("name").notNull().default(""),
+  prompt: text("prompt").notNull().default(""),
+  imageUrl: text("image_url"),
+  status: text("status", {
+    enum: ["pending", "generating", "completed", "failed"],
+  })
+    .notNull()
+    .default("pending"),
+  errorMessage: text("error_message").default(""),
+  modelProvider: text("model_provider"),
+  modelId: text("model_id"),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer("updated_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
 });

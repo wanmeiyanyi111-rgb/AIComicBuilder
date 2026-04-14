@@ -21,12 +21,22 @@ OUTPUT FORMAT — JSON array only, no markdown fences, no commentary:
     "description": "Brief plot summary for this episode",
     "keywords": "keyword1, keyword2, keyword3",
     "idea": "1) List all characters in this episode with roles. 2) COPY the key paragraphs and dialogues from the source text verbatim — preserve original wording, do not summarize. 3) Add scene transition notes and emotional beat markers. Minimum 1000 words. The downstream screenplay generator has NO access to the source — this field is its only reference.",
-    "characters": ["character name 1", "character name 2"]
+    "characters": ["character name 1", "character name 2"],
+    "scenes": ["scene name 1", "scene name 2"],
+    "props": ["prop name 1", "prop name 2"]
   }
 ]
 
 ═══ EPISODE CHARACTERS ═══
 You will be given a full list of extracted characters. For each episode, list ALL character names (both main and supporting) who actually appear in that specific episode. Use exact names as provided. Do NOT include every character in every episode — only those who genuinely appear, speak, or are directly involved in that episode's plot.`;
+
+export const SCRIPT_SPLIT_ASSET_RULES = `═══ EPISODE SCENES & PROPS ═══
+You may also receive candidate scene and prop lists extracted from the script.
+- For each episode, fill "scenes" with only the scene names that actually appear in that episode.
+- For each episode, fill "props" with only the prop names that are actually used or clearly present in that episode.
+- Use exact names from candidate lists whenever possible.
+- Do NOT dump all candidates into every episode.
+- If an episode truly has none, return empty array.`;
 
 export function buildScriptSplitPrompt(
   scriptChunk: string,

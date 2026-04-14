@@ -2,6 +2,10 @@ import type { VideoProvider, VideoGenerateParams, VideoGenerateResult } from "..
 import fs from "node:fs";
 import path from "node:path";
 import { id as genId } from "@/lib/id";
+import {
+  CANONICAL_SEEDANCE_1_5_PRO,
+  normalizeVideoModelId,
+} from "../model-aliases";
 
 function toDataUrl(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase().replace(".", "");
@@ -30,21 +34,36 @@ export class SeedanceProvider implements VideoProvider {
   private baseUrl: string;
   private model: string;
   private uploadDir: string;
+  private resolution: string;
 
   constructor(params?: {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
+    resolution?: string;
     uploadDir?: string;
   }) {
-    this.apiKey = params?.apiKey || process.env.SEEDANCE_API_KEY || "";
+    this.apiKey =
+      params?.apiKey ||
+      process.env.VOLCENGINE_VIDEO_API_KEY ||
+      process.env.SEEDANCE_API_KEY ||
+      "";
     this.baseUrl = (
       params?.baseUrl ||
+      process.env.VOLCENGINE_VIDEO_BASE_URL ||
       process.env.SEEDANCE_BASE_URL ||
       "https://ark.cn-beijing.volces.com/api/v3"
     ).replace(/\/+$/, "");
-    this.model =
-      params?.model || process.env.SEEDANCE_MODEL || "doubao-seedance-1-5-pro-250528";
+    this.model = normalizeVideoModelId(
+      params?.model ||
+      process.env.VOLCENGINE_VIDEO_MODEL ||
+      process.env.SEEDANCE_MODEL ||
+      CANONICAL_SEEDANCE_1_5_PRO
+    );
+    this.resolution =
+      params?.resolution ||
+      process.env.SEEDANCE_RESOLUTION ||
+      "480p";
     this.uploadDir =
       params?.uploadDir || process.env.UPLOAD_DIR || "./uploads";
   }
@@ -104,6 +123,7 @@ export class SeedanceProvider implements VideoProvider {
       ],
       duration: params.duration || 5,
       ratio: params.ratio || "16:9",
+      resolution: this.resolution,
       watermark: false,
       ...(isSeedance2 && { generate_audio: true }),
     };
@@ -146,6 +166,7 @@ export class SeedanceProvider implements VideoProvider {
       content,
       duration: params.duration || 5,
       ratio: params.ratio || "16:9",
+      resolution: this.resolution,
       return_last_frame: true,
       watermark: false,
       ...(isSeedance2 && { generate_audio: true }),

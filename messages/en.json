@@ -24,6 +24,23 @@
     "title": "My Projects",
     "newProject": "New Project",
     "noProjects": "No projects yet. Click the button above to create one.",
+    "styleLabel": "Project Style",
+    "styleHelp": "All episodes in this project will inherit this style.",
+    "transitionProfileLabel": "Shot Transition Style",
+    "transitionProfileHelp": "Controls default transition rhythm. Final result is decided by AI plus engine rules.",
+    "transitionProfileOptions": {
+      "balanced": "Balanced",
+      "cinematic": "Cinematic",
+      "dynamic": "Dynamic",
+      "smooth": "Smooth"
+    },
+    "styleOptions": {
+      "cinematic_realism": "Cinematic Realism",
+      "anime_dynamic": "Dynamic Anime",
+      "ink_wash": "Ink Wash",
+      "film_noir": "Film Noir",
+      "cyberpunk_neon": "Cyberpunk Neon"
+    },
     "deleteConfirmTitle": "Delete Project",
     "deleteConfirmDesc": "Are you sure you want to delete \"{title}\"? This action cannot be undone and all related data will be permanently deleted.",
     "projectStatus": {
@@ -95,7 +112,11 @@
     "kanbanBatchGenerate": "Generate ({count})",
     "continueFromPrev": "Continue from previous",
     "continueFromPrevTooltip": "Use last frame of previous episode as first frame",
-    "prevEpisodeNoFrames": "Previous episode has no generated frames"
+    "prevEpisodeNoFrames": "Previous episode has no generated frames",
+    "styleApplyAllEpisodes": "Save & Sync All Episodes",
+    "styleApplying": "Syncing...",
+    "styleApplySuccess": "Project style updated and synced to all episodes",
+    "styleApplyError": "Failed to update project style"
   },
   "character": {
     "name": "Character Name",
@@ -125,6 +146,31 @@
     "relType_rival": "Rival",
     "relType_stranger": "Stranger",
     "relType_neutral": "Neutral"
+  },
+  "visualAsset": {
+    "title": "Scene & Prop Assets",
+    "subtitle": "Generate dedicated scene and prop images with project style constraints.",
+    "sceneTitle": "Scene Images",
+    "propTitle": "Prop Images",
+    "sceneHint": "Auto constraint: no characters or human silhouettes in scene images.",
+    "propHint": "Auto constraint: single prop on pure white background with no body parts.",
+    "addScene": "Add Scene",
+    "addProp": "Add Prop",
+    "extractCandidates": "Auto Extract Candidates",
+    "extractingCandidates": "Extracting...",
+    "extractSuccess": "{count} candidates added (Scenes {scenes} / Props {props})",
+    "extractNoNew": "No new candidates were added",
+    "batchGenerate": "Batch Generate",
+    "generate": "Generate Image",
+    "noImage": "No image yet",
+    "noScene": "No scene assets yet. Click Add Scene to start.",
+    "noProp": "No prop assets yet. Click Add Prop to start.",
+    "sceneName": "Scene name",
+    "propName": "Prop name",
+    "scenePrompt": "Describe environment, lighting, mood, and materials...",
+    "propPrompt": "Describe prop material, shape, and details...",
+    "defaultSceneName": "New Scene",
+    "defaultPropName": "New Prop"
   },
   "shot": {
     "sequence": "Shot {number}",
@@ -192,7 +238,20 @@
     "generateRefPrompts": "Generate Ref Prompts",
     "batchGenerateRefImages": "Batch Generate Ref Images",
     "needTwoVersions": "Need at least 2 versions to compare",
-    "noFrame": "No frame"
+    "noFrame": "No frame",
+    "replanLongShots": "Replan Long Shots",
+    "replanLongShotsPreview": "Preview Replan",
+    "replanLongShotsPreviewHelp": "Estimate split result without writing data",
+    "replanLongShotsPreviewRunning": "Previewing...",
+    "replanLongShotsHelp": "Split shots longer than 5s into 3-5s segments for better control",
+    "replanLongShotsRunning": "Replanning...",
+    "replanLongShotsSuccess": "Replanned {split} long shots, added {added} segments",
+    "replanLongShotsDryRunSummary": "Preview complete: shots {before} → {after}, split {split} long shots, add {added} segments",
+    "replanLongShotsError": "Failed to replan long shots",
+    "noLongShotsToReplan": "No shots longer than 5 seconds in this scope",
+    "segmentBadge": "Segment {index}/{total}",
+    "tailFrameLinkBadge": "Tail-frame link",
+    "originalDurationBadge": "Original {seconds}s"
   },
   "episode": {
     "title": "Episodes",
@@ -256,6 +315,7 @@
     "importStep": {
       "parse": "Parse Text",
       "characters": "Extract Characters",
+      "sceneProps": "Extract Scenes/Props",
       "split": "Auto Split",
       "generate": "Create Episodes"
     }
@@ -319,6 +379,12 @@
       "characterExtract": "Character Extraction",
       "importCharacterExtract": "Import Character Extraction",
       "characterImage": "Character Design Sheet",
+      "scenePropExtract": "Scene/Prop Extraction",
+      "scenePropExtractDesc": "Extract scene and prop candidates from script for direct image generation",
+      "sceneImage": "Scene Design Image",
+      "sceneImageDesc": "Prompt template for standalone scene generation (no characters)",
+      "propImage": "Prop Design Image",
+      "propImageDesc": "Prompt template for standalone prop generation (single object on white background)",
       "shotSplit": "Shot Decomposition",
       "frameGenerateFirst": "First Frame",
       "frameGenerateLast": "Last Frame",
@@ -368,7 +434,11 @@
       "useProjectPromptsDesc": "When disabled, uses global defaults. Enable to customize for this project.",
       "customize": "Customize",
       "useGlobal": "Use Global",
-      "modifiedCount": "{count} modified"
+      "modifiedCount": "{count} modified",
+      "styleApplyAllEpisodes": "Save & Sync All Episodes",
+      "styleApplying": "Syncing...",
+      "styleApplySuccess": "Project style updated and synced to all episodes",
+      "styleApplyError": "Failed to update project style"
     },
     "presets": {
       "title": "Preset Templates",
@@ -490,7 +560,9 @@
       "rules": "Rules",
       "rulesDesc": "Core ruleset for this prompt",
       "durationStrategy": "Duration Strategy",
-      "durationStrategyDesc": "Description-granularity rules tiered by shot duration"
+      "durationStrategyDesc": "Description-granularity rules tiered by shot duration",
+      "transitionProfileId": "Transition Profile",
+      "transitionProfileIdDesc": "Shot transition policy preset ID (balanced / cinematic / dynamic / smooth)"
     }
   }
 }

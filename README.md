@@ -87,6 +87,44 @@ pnpm dev
 
 访问 [http://localhost:3000](http://localhost:3000)
 
+### 推荐模型配置（Doubao + NanoBanana2 + Seedance1.5 Pro）
+
+可直接复制 `.env.example` 为 `.env`，并填写以下变量（支持仅通过环境变量驱动，无需先在 UI 中手动勾选默认模型）：
+
+```bash
+# 文本（Doubao-Seed-2.0-pro）
+OPENAI_COMPAT_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+OPENAI_COMPAT_API_KEY=你的ArkKey
+OPENAI_COMPAT_MODEL=doubao-seed-2-0-pro-260215
+
+# 图片（NanoBanana2）
+IMAGE_MODEL_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+IMAGE_MODEL_API_KEY=你的ArkKey
+IMAGE_MODEL_NAME=nano_banana_2
+IMAGE_MODEL_PROVIDER=openai
+
+# 视频（seedance1.5pro）
+VOLCENGINE_VIDEO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+VOLCENGINE_VIDEO_API_KEY=你的ArkKey
+VOLCENGINE_VIDEO_MODEL=doubao-seedance-1-5-pro-251215
+```
+
+说明：
+- 文本别名会自动归一化到 `doubao-seed-2-0-pro-260215`（例如 `Doubao-Seed-2.0-pro`）。
+- 图片别名会自动归一化到 `nano_banana_2`（例如 `NanoBanana2`）。
+- 视频别名会自动归一化到 `doubao-seedance-1-5-pro-251215`（例如 `seedance1.5pro`）。
+- `设置 -> 模型` 页面点击“拉取模型”时，上述三个模型会作为推荐项展示。
+
+可选：如果你希望图片改走 Wuyin 异步接口（`/api/async/image_nanoBanana2`），可改为：
+
+```bash
+IMAGE_MODEL_PROVIDER=wuyin
+WUYINKEJI_BASE_URL=https://api.wuyinkeji.com
+WUYINKEJI_API_KEY=你的WuyinKey
+WUYINKEJI_IMAGE_POLL_INTERVAL_MS=3000
+WUYINKEJI_IMAGE_POLL_MAX_ATTEMPTS=80
+```
+
 ## Docker 部署
 
 ### 快速启动
@@ -248,6 +286,4 @@ https://www.bilibili.com/video/BV1hTw1zAEgY/
 ## License
 
 [Apache License 2.0](./LICENSE)
-
-
 

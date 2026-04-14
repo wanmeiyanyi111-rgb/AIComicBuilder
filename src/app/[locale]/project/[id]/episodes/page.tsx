@@ -9,7 +9,20 @@ import { Button } from "@/components/ui/button";
 import { EpisodeCard } from "@/components/editor/episode-card";
 import { EpisodeDialog } from "@/components/editor/episode-dialog";
 import { useEpisodeStore, type Episode } from "@/stores/episode-store";
+import { useProjectStore } from "@/stores/project-store";
 import { apiFetch } from "@/lib/api-fetch";
+import {
+  DEFAULT_PROJECT_STYLE,
+  PROJECT_STYLE_IDS,
+  resolveProjectStyle,
+  type ProjectStyleId,
+} from "@/lib/project-style";
+import {
+  DEFAULT_SHOT_TRANSITION_PROFILE,
+  SHOT_TRANSITION_PROFILE_IDS,
+  normalizeShotTransitionProfileId,
+  type ShotTransitionProfileId,
+} from "@/lib/shot-transition-profile";
 import Link from "next/link";
 
 export default function EpisodesPage({
@@ -21,6 +34,7 @@ export default function EpisodesPage({
   const locale = useLocale();
   const t = useTranslations("episode");
   const tc = useTranslations("common");
+  const tr = useTranslations();
   const {
     episodes,
     loading,
@@ -29,6 +43,8 @@ export default function EpisodesPage({
     deleteEpisode,
     updateEpisode,
   } = useEpisodeStore();
+  const project = useProjectStore((state) => state.project);
+  const setProject = useProjectStore((state) => state.setProject);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editingEpisode, setEditingEpisode] = useState<Episode | null>(null);
@@ -37,10 +53,50 @@ export default function EpisodesPage({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [merging, setMerging] = useState(false);
   const [mergedVideoUrl, setMergedVideoUrl] = useState<string | null>(null);
+  const [styleId, setStyleId] = useState<ProjectStyleId>(DEFAULT_PROJECT_STYLE);
+  const [transitionProfileId, setTransitionProfileId] =
+    useState<ShotTransitionProfileId>(DEFAULT_SHOT_TRANSITION_PROFILE);
+  const [updatingStyle, setUpdatingStyle] = useState(false);
+
+  const currentProjectStyleId = resolveProjectStyle(project?.styleId).styleId;
 
   useEffect(() => {
     fetchEpisodes(projectId);
   }, [projectId, fetchEpisodes]);
+
+  useEffect(() => {
+    setStyleId(currentProjectStyleId);
+  }, [currentProjectStyleId, project?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch(`/api/projects/${projectId}/prompt-templates`);
+        const templates = (await res.json()) as Array<{
+          promptKey?: string;
+          slotKey?: string | null;
+          content?: string;
+        }>;
+        const hit = templates.find(
+          (tpl) =>
+            tpl.promptKey === "shot_split" && tpl.slotKey === "transition_profile_id"
+        );
+        if (!cancelled) {
+          setTransitionProfileId(
+            normalizeShotTransitionProfileId(hit?.content)
+          );
+        }
+      } catch {
+        if (!cancelled) {
+          setTransitionProfileId(DEFAULT_SHOT_TRANSITION_PROFILE);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
 
   // Close video modal on Escape
   useEffect(() => {
@@ -118,6 +174,41 @@ export default function EpisodesPage({
     }
   }
 
+  async function handleApplyProjectStyle() {
+    if (!project) return;
+    setUpdatingStyle(true);
+    try {
+      const res = await apiFetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          styleId,
+          applyStyleToEpisodes: true,
+        }),
+      });
+      const updated = await res.json();
+      await apiFetch(`/api/projects/${projectId}/prompt-templates/shot_split`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "slots",
+          slots: { transition_profile_id: transitionProfileId },
+        }),
+      });
+      setProject({
+        ...project,
+        ...updated,
+        styleId: updated.styleId || styleId,
+      });
+      await fetchEpisodes(projectId);
+      toast.success(tr("project.styleApplySuccess"));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : tr("project.styleApplyError"));
+    } finally {
+      setUpdatingStyle(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
@@ -180,6 +271,58 @@ export default function EpisodesPage({
             <Plus className="mr-1.5 h-4 w-4" />
             {t("create")}
           </Button>
+        </div>
+      </div>
+
+      <div className="mb-6 rounded-2xl border border-[--border-subtle] bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-[--text-primary]">
+              {tr("dashboard.styleLabel")}
+            </p>
+            <p className="text-xs text-[--text-muted]">{tr("dashboard.styleHelp")}</p>
+            <p className="mt-1 text-xs text-[--text-muted]">
+              {tr("dashboard.transitionProfileHelp")}
+            </p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <select
+              value={styleId}
+              onChange={(e) => setStyleId(e.target.value as ProjectStyleId)}
+              className="h-10 min-w-[220px] rounded-lg border border-[--border-subtle] bg-white px-3 text-sm text-[--text-primary] outline-none focus:border-primary"
+              disabled={updatingStyle}
+            >
+              {PROJECT_STYLE_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {tr(`dashboard.styleOptions.${id}`)}
+                </option>
+              ))}
+            </select>
+            <select
+              value={transitionProfileId}
+              onChange={(e) =>
+                setTransitionProfileId(e.target.value as ShotTransitionProfileId)
+              }
+              className="h-10 min-w-[220px] rounded-lg border border-[--border-subtle] bg-white px-3 text-sm text-[--text-primary] outline-none focus:border-primary"
+              disabled={updatingStyle}
+            >
+              {SHOT_TRANSITION_PROFILE_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {tr(`dashboard.transitionProfileOptions.${id}`)}
+                </option>
+              ))}
+            </select>
+            <Button
+              onClick={handleApplyProjectStyle}
+              disabled={updatingStyle || !project}
+              className="h-10 rounded-lg"
+            >
+              {updatingStyle && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+              {updatingStyle
+                ? tr("project.styleApplying")
+                : tr("project.styleApplyAllEpisodes")}
+            </Button>
+          </div>
         </div>
       </div>
 

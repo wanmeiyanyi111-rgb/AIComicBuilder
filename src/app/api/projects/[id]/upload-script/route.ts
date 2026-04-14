@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { generateText } from "ai";
 import { createLanguageModel, extractJSON } from "@/lib/ai/ai-sdk";
+import { hasTextModelConfig } from "@/lib/ai/config-presence";
 import type { ProviderConfig } from "@/lib/ai/ai-sdk";
 import { db } from "@/lib/db";
-import { projects, episodes } from "@/lib/db/schema";
-import { eq, and, max } from "drizzle-orm";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { episodes } from "@/lib/db/schema";
+import { eq, max } from "drizzle-orm";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { id as genId } from "@/lib/id";
 import { buildScriptSplitPrompt } from "@/lib/ai/prompts/script-split";
 import { resolvePrompt } from "@/lib/ai/prompts/resolver";
@@ -88,17 +89,12 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: projectId } = await params;
-  const userId = getUserIdFromRequest(request);
-
-  // Verify project ownership
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(request, projectId);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  const userId = project.userId;
 
   // Parse form data
   const formData = await request.formData();
@@ -109,18 +105,19 @@ export async function POST(
     return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
   }
 
-  if (!modelConfigRaw) {
-    return NextResponse.json(
-      { error: "No model config provided" },
-      { status: 400 }
-    );
+  let modelConfig: { text: ProviderConfig | null } = { text: null };
+  if (modelConfigRaw) {
+    try {
+      modelConfig = JSON.parse(modelConfigRaw) as { text: ProviderConfig | null };
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid model config format" },
+        { status: 400 }
+      );
+    }
   }
 
-  const modelConfig = JSON.parse(modelConfigRaw) as {
-    text: ProviderConfig | null;
-  };
-
-  if (!modelConfig.text) {
+  if (!hasTextModelConfig(modelConfig)) {
     return NextResponse.json(
       { error: "No text model configured" },
       { status: 400 }
@@ -150,9 +147,12 @@ export async function POST(
   const scriptSplitSystem = await resolvePrompt("script_split", { userId, projectId });
 
   // Process all chunks concurrently
-  let episodeOffset = 0;
+  const episodeOffset = 0;
+  const styleContext = project.worldSetting
+    ? `\n\n【项目风格】\n${project.worldSetting}\n\n请确保分集标题、分集简介与关键词都与该风格一致。`
+    : "";
   const chunkPromises = chunks.map(async (chunk, idx) => {
-    const prompt = buildScriptSplitPrompt(chunk, {
+    const prompt = buildScriptSplitPrompt(chunk + styleContext, {
       chunkIndex: idx,
       totalChunks: chunks.length,
       episodeOffset, // approximate — exact offset tricky with concurrency
@@ -200,6 +200,7 @@ export async function POST(
         description: ep.description || "",
         keywords: ep.keywords || "",
         idea: ep.idea || "",
+        colorPalette: project.colorPalette || "",
         sequence: seq++,
       })
       .returning();

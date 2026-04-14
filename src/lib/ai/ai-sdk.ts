@@ -1,6 +1,7 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import type { LanguageModel } from "ai";
+import { CANONICAL_DOUBAO_SEED_2_PRO, normalizeTextModelId } from "./model-aliases";
 
 export interface ProviderConfig {
   protocol: string;
@@ -10,23 +11,74 @@ export interface ProviderConfig {
   modelId: string;
 }
 
-export function createLanguageModel(config: ProviderConfig): LanguageModel {
-  switch (config.protocol) {
+function resolveTextProviderConfig(config?: ProviderConfig | null): ProviderConfig | null {
+  if (config?.apiKey?.trim()) {
+    return {
+      ...config,
+      protocol: (config.protocol || "openai").trim(),
+      baseUrl: (config.baseUrl || "").trim(),
+      apiKey: config.apiKey.trim(),
+      modelId: normalizeTextModelId(config.modelId),
+    };
+  }
+
+  const openaiApiKey =
+    process.env.OPENAI_COMPAT_API_KEY?.trim() ||
+    process.env.OPENAI_API_KEY?.trim() ||
+    "";
+  if (openaiApiKey) {
+    return {
+      protocol: "openai",
+      baseUrl:
+        process.env.OPENAI_COMPAT_BASE_URL?.trim() ||
+        process.env.OPENAI_BASE_URL?.trim() ||
+        "https://ark.cn-beijing.volces.com/api/v3",
+      apiKey: openaiApiKey,
+      modelId: normalizeTextModelId(
+        process.env.OPENAI_COMPAT_MODEL ||
+          process.env.OPENAI_MODEL ||
+          CANONICAL_DOUBAO_SEED_2_PRO
+      ),
+    };
+  }
+
+  const geminiApiKey = process.env.GEMINI_API_KEY?.trim() || "";
+  if (geminiApiKey) {
+    return {
+      protocol: "gemini",
+      baseUrl:
+        process.env.GEMINI_BASE_URL?.trim() ||
+        "https://generativelanguage.googleapis.com",
+      apiKey: geminiApiKey,
+      modelId: process.env.GEMINI_MODEL?.trim() || "gemini-2.0-flash",
+    };
+  }
+
+  return null;
+}
+
+export function createLanguageModel(config?: ProviderConfig | null): LanguageModel {
+  const resolved = resolveTextProviderConfig(config);
+  if (!resolved) {
+    throw new Error("No text model configured");
+  }
+
+  switch (resolved.protocol) {
     case "openai": {
       const provider = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseUrl,
+        apiKey: resolved.apiKey,
+        baseURL: resolved.baseUrl,
       });
-      return provider.chat(config.modelId);
+      return provider.chat(resolved.modelId);
     }
     case "gemini": {
       const provider = createGoogleGenerativeAI({
-        apiKey: config.apiKey,
+        apiKey: resolved.apiKey,
       });
-      return provider(config.modelId);
+      return provider(resolved.modelId);
     }
     default:
-      throw new Error(`Unsupported protocol: ${config.protocol}`);
+      throw new Error(`Unsupported protocol: ${resolved.protocol}`);
   }
 }
 

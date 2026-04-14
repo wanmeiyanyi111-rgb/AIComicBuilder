@@ -1,20 +1,15 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { projects, importLogs } from "@/lib/db/schema";
-import { eq, and, asc } from "drizzle-orm";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { importLogs } from "@/lib/db/schema";
+import { eq, asc } from "drizzle-orm";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: projectId } = await params;
-  const userId = getUserIdFromRequest(request);
-
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(request, projectId);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -34,12 +29,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: projectId } = await params;
-  const userId = getUserIdFromRequest(request);
-
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(request, projectId);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

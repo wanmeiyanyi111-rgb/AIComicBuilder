@@ -1,22 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { episodes, projects } from "@/lib/db/schema";
+import { episodes } from "@/lib/db/schema";
 import { eq, and, inArray, asc } from "drizzle-orm";
 import { assembleVideo } from "@/lib/video/ffmpeg";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: projectId } = await params;
-  const userId = getUserIdFromRequest(req);
-
-  // Verify project ownership
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
+  const project = await assertProjectOwnership(req, projectId);
 
   if (!project) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });

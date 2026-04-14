@@ -1,0 +1,1 @@
+ALTER TABLE projects ADD COLUMN style_id TEXT DEFAULT '';

@@ -1,30 +1,18 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import {
-  projects,
   episodes,
   shots,
   characters,
   dialogues,
   storyboardVersions,
-  episodeCharacters,
 } from "@/lib/db/schema";
-import { eq, asc, and, or, isNull, desc, inArray } from "drizzle-orm";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
+import { eq, asc, and, desc, inArray } from "drizzle-orm";
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { markDownstreamStale } from "@/lib/staleness";
+import { resolveProjectStyleFromSource } from "@/lib/project-style";
 
-async function resolveProjectAndEpisode(
-  projectId: string,
-  episodeId: string,
-  userId: string
-) {
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)));
-
-  if (!project) return { project: null, episode: null };
-
+async function resolveEpisode(projectId: string, episodeId: string) {
   const [episode] = await db
     .select()
     .from(episodes)
@@ -32,7 +20,7 @@ async function resolveProjectAndEpisode(
       and(eq(episodes.id, episodeId), eq(episodes.projectId, projectId))
     );
 
-  return { project, episode: episode ?? null };
+  return episode ?? null;
 }
 
 export async function GET(
@@ -40,12 +28,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string; episodeId: string }> }
 ) {
   const { id, episodeId } = await params;
-  const userId = getUserIdFromRequest(request);
-  const { project, episode } = await resolveProjectAndEpisode(
-    id,
-    episodeId,
-    userId
-  );
+  const project = await assertProjectOwnership(request, id);
+  const episode = project ? await resolveEpisode(id, episodeId) : null;
 
   if (!project || !episode) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -68,20 +52,12 @@ export async function GET(
 
   const resolvedVersionId = versionId ?? allVersions[0]?.id;
 
-  // Fetch characters linked to this episode via episode_characters table
-  const linkedCharIds = await db
-    .select({ characterId: episodeCharacters.characterId })
-    .from(episodeCharacters)
-    .where(eq(episodeCharacters.episodeId, episodeId));
-
-  let epCharacters: typeof characters.$inferSelect[] = [];
-  if (linkedCharIds.length > 0) {
-    epCharacters = await db
-      .select()
-      .from(characters)
-      .where(inArray(characters.id, linkedCharIds.map((r) => r.characterId)));
-  }
-  // No links = no characters for this episode (user needs to run character extraction)
+  // Characters are project-level shared assets and should be visible in
+  // every episode of the same project.
+  const epCharacters = await db
+    .select()
+    .from(characters)
+    .where(eq(characters.projectId, id));
 
   // Fetch shots for this episode + version
   const episodeShots = resolvedVersionId
@@ -149,11 +125,20 @@ export async function GET(
     })
   );
 
+  const normalizedStyle = resolveProjectStyleFromSource({
+    styleId: project.styleId,
+    worldSetting: project.worldSetting,
+    colorPalette: project.colorPalette,
+  });
+
   return NextResponse.json({
     ...episode,
     id: project.id,
     episodeId: episode.id,
     title: project.title,
+    styleId: normalizedStyle.styleId,
+    worldSetting: project.worldSetting,
+    colorPalette: episode.colorPalette || project.colorPalette,
     idea: episode.idea,
     script: episode.script,
     status: episode.status,
@@ -178,12 +163,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string; episodeId: string }> }
 ) {
   const { id, episodeId } = await params;
-  const userId = getUserIdFromRequest(request);
-  const { project, episode } = await resolveProjectAndEpisode(
-    id,
-    episodeId,
-    userId
-  );
+  const project = await assertProjectOwnership(request, id);
+  const episode = project ? await resolveEpisode(id, episodeId) : null;
 
   if (!project || !episode) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -232,12 +213,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string; episodeId: string }> }
 ) {
   const { id, episodeId } = await params;
-  const userId = getUserIdFromRequest(request);
-  const { project, episode } = await resolveProjectAndEpisode(
-    id,
-    episodeId,
-    userId
-  );
+  const project = await assertProjectOwnership(request, id);
+  const episode = project ? await resolveEpisode(id, episodeId) : null;
 
   if (!project || !episode) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

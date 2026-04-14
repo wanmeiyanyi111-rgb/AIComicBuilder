@@ -1,25 +1,22 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { projects, episodes, shots, characters, episodeCharacters } from "@/lib/db/schema";
-import { eq, asc, and, max, isNotNull, inArray } from "drizzle-orm";
+import {
+  episodes,
+  shots,
+  characters,
+  episodeCharacters,
+  visualAssets,
+} from "@/lib/db/schema";
+import { eq, asc, max, and, inArray } from "drizzle-orm";
 import { id as genId } from "@/lib/id";
-import { getUserIdFromRequest } from "@/lib/get-user-id";
-
-async function resolveProject(id: string, userId: string) {
-  const [project] = await db
-    .select()
-    .from(projects)
-    .where(and(eq(projects.id, id), eq(projects.userId, userId)));
-  return project ?? null;
-}
+import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const userId = getUserIdFromRequest(request);
-  const project = await resolveProject(id, userId);
+  const project = await assertProjectOwnership(request, id);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -31,10 +28,77 @@ export async function GET(
     .where(eq(episodes.projectId, id))
     .orderBy(asc(episodes.sequence));
 
-  // Enrich each episode with preview images for cards
+  const episodeIds = allEpisodes.map((ep) => ep.id);
+  const charLinks =
+    episodeIds.length > 0
+      ? await db
+          .select({
+            episodeId: episodeCharacters.episodeId,
+            characterName: characters.name,
+          })
+          .from(episodeCharacters)
+          .innerJoin(characters, eq(episodeCharacters.characterId, characters.id))
+          .where(inArray(episodeCharacters.episodeId, episodeIds))
+      : [];
+
+  const assetLinks =
+    episodeIds.length > 0
+      ? await db
+          .select({
+            episodeId: visualAssets.episodeId,
+            type: visualAssets.type,
+            name: visualAssets.name,
+          })
+          .from(visualAssets)
+          .where(
+            and(
+              eq(visualAssets.projectId, id),
+              inArray(visualAssets.episodeId, episodeIds)
+            )
+          )
+      : [];
+
+  const charsByEpisode = new Map<string, Set<string>>();
+  for (const row of charLinks) {
+    const key = row.episodeId;
+    if (!charsByEpisode.has(key)) charsByEpisode.set(key, new Set<string>());
+    charsByEpisode.get(key)?.add(row.characterName);
+  }
+
+  const scenesByEpisode = new Map<string, Set<string>>();
+  const propsByEpisode = new Map<string, Set<string>>();
+  for (const row of assetLinks) {
+    if (!row.episodeId) continue;
+    if (row.type === "scene") {
+      if (!scenesByEpisode.has(row.episodeId)) {
+        scenesByEpisode.set(row.episodeId, new Set<string>());
+      }
+      scenesByEpisode.get(row.episodeId)?.add(row.name);
+    }
+    if (row.type === "prop") {
+      if (!propsByEpisode.has(row.episodeId)) {
+        propsByEpisode.set(row.episodeId, new Set<string>());
+      }
+      propsByEpisode.get(row.episodeId)?.add(row.name);
+    }
+  }
+
+  // Enrich each episode with preview images and linked resources for cards
   const enriched = await Promise.all(
     allEpisodes.map(async (ep) => {
-      if (ep.finalVideoUrl) return { ...ep, previewImages: [] };
+      const linkedCharacters = [...(charsByEpisode.get(ep.id) || new Set<string>())];
+      const linkedScenes = [...(scenesByEpisode.get(ep.id) || new Set<string>())];
+      const linkedProps = [...(propsByEpisode.get(ep.id) || new Set<string>())];
+
+      if (ep.finalVideoUrl) {
+        return {
+          ...ep,
+          previewImages: [],
+          characters: linkedCharacters,
+          scenes: linkedScenes,
+          props: linkedProps,
+        };
+      }
 
       // 1) Collect frame images from shot_assets, deduplicated
       const epShots = await db
@@ -58,30 +122,31 @@ export async function GET(
       }
 
       if (frameSet.size > 0) {
-        return { ...ep, previewImages: [...frameSet] };
+        return {
+          ...ep,
+          previewImages: [...frameSet],
+          characters: linkedCharacters,
+          scenes: linkedScenes,
+          props: linkedProps,
+        };
       }
 
-      // 2) Fall back to character reference images linked to this episode
-      const linkedCharIds = await db
-        .select({ characterId: episodeCharacters.characterId })
-        .from(episodeCharacters)
-        .where(eq(episodeCharacters.episodeId, ep.id));
+      // 2) Fall back to project-wide character reference images
+      const charImages = await db
+        .select({ referenceImage: characters.referenceImage })
+        .from(characters)
+        .where(eq(characters.projectId, id));
+      const charUrls = charImages
+        .map((c) => c.referenceImage)
+        .filter((url): url is string => !!url);
 
-      let charUrls: string[] = [];
-      if (linkedCharIds.length > 0) {
-        const charImages = await db
-          .select({ referenceImage: characters.referenceImage })
-          .from(characters)
-          .where(
-            and(
-              inArray(characters.id, linkedCharIds.map((r) => r.characterId)),
-              isNotNull(characters.referenceImage)
-            )
-          );
-        charUrls = charImages.map((c) => c.referenceImage!).filter(Boolean);
-      }
-
-      return { ...ep, previewImages: charUrls };
+      return {
+        ...ep,
+        previewImages: charUrls,
+        characters: linkedCharacters,
+        scenes: linkedScenes,
+        props: linkedProps,
+      };
     })
   );
 
@@ -93,8 +158,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const userId = getUserIdFromRequest(request);
-  const project = await resolveProject(id, userId);
+  const project = await assertProjectOwnership(request, id);
 
   if (!project) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -118,6 +182,7 @@ export async function POST(
       title: body.title,
       description: body.description || "",
       keywords: body.keywords || "",
+      colorPalette: project.colorPalette || "",
       sequence: nextSequence,
     })
     .returning();
