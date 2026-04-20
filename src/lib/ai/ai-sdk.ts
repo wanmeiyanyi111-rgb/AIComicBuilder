@@ -88,6 +88,77 @@ export function createLanguageModel(config?: ProviderConfig | null): LanguageMod
 export function extractJSON(text: string): string {
   const match = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const raw = match ? match[1].trim() : text.trim();
+  const stripped = raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+  const firstBrace = stripped.indexOf("{");
+  const firstBracket = stripped.indexOf("[");
+  const hasObject = firstBrace >= 0;
+  const hasArray = firstBracket >= 0;
+  const startIndex =
+    hasObject && hasArray
+      ? Math.min(firstBrace, firstBracket)
+      : hasObject
+        ? firstBrace
+        : hasArray
+          ? firstBracket
+          : -1;
+
+  if (startIndex < 0) {
+    return stripped;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let openChar = "";
+  let closeChar = "";
+
+  for (let index = startIndex; index < stripped.length; index++) {
+    const char = stripped[index];
+    if (!openChar) {
+      if (char === "{") {
+        openChar = "{";
+        closeChar = "}";
+        depth = 1;
+        continue;
+      }
+      if (char === "[") {
+        openChar = "[";
+        closeChar = "]";
+        depth = 1;
+        continue;
+      }
+    }
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (char === openChar) {
+      depth += 1;
+      continue;
+    }
+
+    if (char === closeChar) {
+      depth -= 1;
+      if (depth === 0) {
+        return stripped.slice(startIndex, index + 1);
+      }
+    }
+  }
+
   // Remove control characters that break JSON.parse (except \n \r \t)
-  return raw.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+  return stripped;
 }

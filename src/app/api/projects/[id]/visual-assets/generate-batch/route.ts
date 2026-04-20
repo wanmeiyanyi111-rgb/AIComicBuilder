@@ -1,4 +1,4 @@
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { hasImageModelConfig } from "@/lib/ai/config-presence";
@@ -15,10 +15,6 @@ import {
 const DEFAULT_BATCH_CONCURRENCY = 2;
 const MAX_BATCH_CONCURRENCY = 4;
 const GENERATING_STALE_SECONDS = 10 * 60;
-
-function normalizeAssetKey(row: { type: string; name: string }) {
-  return `${row.type}:${(row.name || "").trim().toLowerCase()}`;
-}
 
 function toUnixSeconds(value: unknown): number {
   if (typeof value === "number") return value;
@@ -70,10 +66,7 @@ export async function POST(
   const episodeId = body.episodeId?.trim();
   const conditions = [eq(visualAssets.projectId, projectId)];
   if (episodeId) {
-    // Keep behavior consistent with list API: include episode-specific + global assets.
-    conditions.push(
-      or(eq(visualAssets.episodeId, episodeId), isNull(visualAssets.episodeId))!
-    );
+    conditions.push(eq(visualAssets.episodeId, episodeId));
   }
   if (body.type && isVisualAssetType(body.type)) {
     conditions.push(eq(visualAssets.type, body.type));
@@ -90,17 +83,7 @@ export async function POST(
     return tb - ta;
   });
 
-  let candidateRows = sorted;
-  let usedGlobalFallback = false;
-  if (episodeId) {
-    const episodeRows = sorted.filter((row) => row.episodeId === episodeId);
-    if (episodeRows.length > 0) {
-      candidateRows = episodeRows;
-    } else {
-      candidateRows = sorted.filter((row) => row.episodeId === null);
-      usedGlobalFallback = true;
-    }
-  }
+  const candidateRows = sorted;
 
   const nowSeconds = Math.floor(Date.now() / 1000);
   const targets = body.overwrite
@@ -149,7 +132,7 @@ export async function POST(
   return NextResponse.json({
     total: candidateRows.length,
     generated: targets.length,
-    usedGlobalFallback,
+    usedGlobalFallback: false,
     results,
   });
 }

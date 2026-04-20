@@ -11,6 +11,21 @@ import { eq, asc, and, desc, inArray } from "drizzle-orm";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { markDownstreamStale } from "@/lib/staleness";
 import { resolveProjectStyleFromSource } from "@/lib/project-style";
+import { getScopedEpisodeCharacters } from "@/lib/episode-resources";
+import { normalizeRuntimeGenerationMode } from "@/lib/generation-mode";
+import {
+  parseStoryboardResolvedResourceSnapshot,
+  parseStoryboardWorkflowState,
+} from "@/lib/storyboard/shot-workflow";
+
+function parseSplitMeta(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
 
 async function resolveEpisode(projectId: string, episodeId: string) {
   const [episode] = await db
@@ -52,12 +67,7 @@ export async function GET(
 
   const resolvedVersionId = versionId ?? allVersions[0]?.id;
 
-  // Characters are project-level shared assets and should be visible in
-  // every episode of the same project.
-  const epCharacters = await db
-    .select()
-    .from(characters)
-    .where(eq(characters.projectId, id));
+  const epCharacters = await getScopedEpisodeCharacters(id, episodeId);
 
   // Fetch shots for this episode + version
   const episodeShots = resolvedVersionId
@@ -121,7 +131,15 @@ export async function GET(
         modelId: a.modelId,
         meta: a.meta ? JSON.parse(a.meta) : null,
       }));
-      return { ...shot, dialogues: shotDialogues, assets };
+      return {
+        ...shot,
+        workflowState: parseStoryboardWorkflowState(shot.workflowState),
+        resolvedResourceSnapshot: parseStoryboardResolvedResourceSnapshot(
+          shot.resolvedResourceSnapshot
+        ),
+        dialogues: shotDialogues,
+        assets,
+      };
     })
   );
 
@@ -133,6 +151,7 @@ export async function GET(
 
   return NextResponse.json({
     ...episode,
+    splitMeta: parseSplitMeta(episode.splitMeta),
     id: project.id,
     episodeId: episode.id,
     title: project.title,
@@ -143,7 +162,7 @@ export async function GET(
     script: episode.script,
     status: episode.status,
     finalVideoUrl: episode.finalVideoUrl,
-    generationMode: episode.generationMode,
+    generationMode: normalizeRuntimeGenerationMode(episode.generationMode),
     characters: epCharacters,
     shots: enrichedShots,
     versions: allVersions.map((v) => ({
@@ -178,11 +197,23 @@ export async function PATCH(
     script: string;
     outline: string;
     status: "draft" | "processing" | "completed";
-    generationMode: "keyframe" | "reference";
+    generationMode: "storyboard_grid" | "keyframe" | "reference";
     targetDuration: number;
+    splitMeta: Record<string, unknown> | string | null;
   }>;
 
-  const { title, description, keywords, idea, script, outline, status, generationMode, targetDuration } = body;
+  const {
+    title,
+    description,
+    keywords,
+    idea,
+    script,
+    outline,
+    status,
+    generationMode,
+    targetDuration,
+    splitMeta,
+  } = body;
 
   const [updated] = await db
     .update(episodes)
@@ -194,8 +225,18 @@ export async function PATCH(
       ...(script !== undefined && { script }),
       ...(outline !== undefined && { outline }),
       ...(status !== undefined && { status }),
-      ...(generationMode !== undefined && { generationMode }),
+      ...(generationMode !== undefined && {
+        generationMode: normalizeRuntimeGenerationMode(generationMode),
+      }),
       ...(targetDuration !== undefined && { targetDuration }),
+      ...(splitMeta !== undefined && {
+        splitMeta:
+          splitMeta === null
+            ? ""
+            : typeof splitMeta === "string"
+              ? splitMeta
+              : JSON.stringify(splitMeta),
+      }),
       updatedAt: new Date(),
     })
     .where(eq(episodes.id, episodeId))
@@ -205,7 +246,11 @@ export async function PATCH(
     await markDownstreamStale("episode", episodeId);
   }
 
-  return NextResponse.json(updated);
+  return NextResponse.json({
+    ...updated,
+    generationMode: normalizeRuntimeGenerationMode(updated.generationMode),
+    splitMeta: parseSplitMeta(updated.splitMeta),
+  });
 }
 
 export async function DELETE(

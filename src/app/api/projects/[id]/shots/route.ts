@@ -3,6 +3,10 @@ import { db } from "@/lib/db";
 import { shots, dialogues, characters } from "@/lib/db/schema";
 import { eq, asc } from "drizzle-orm";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
+import {
+  parseStoryboardResolvedResourceSnapshot,
+  parseStoryboardWorkflowState,
+} from "@/lib/storyboard/shot-workflow";
 
 export async function GET(
   request: Request,
@@ -33,7 +37,14 @@ export async function GET(
         .innerJoin(characters, eq(dialogues.characterId, characters.id))
         .where(eq(dialogues.shotId, shot.id))
         .orderBy(asc(dialogues.sequence));
-      return { ...shot, dialogues: shotDialogues };
+      return {
+        ...shot,
+        workflowState: parseStoryboardWorkflowState(shot.workflowState),
+        resolvedResourceSnapshot: parseStoryboardResolvedResourceSnapshot(
+          shot.resolvedResourceSnapshot
+        ),
+        dialogues: shotDialogues,
+      };
     })
   );
 

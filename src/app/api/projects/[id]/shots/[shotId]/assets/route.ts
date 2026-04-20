@@ -31,6 +31,7 @@ import { shotAssets, shots } from "@/lib/db/schema";
 import { and, eq, inArray } from "drizzle-orm";
 import { id as genId } from "@/lib/id";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
+import { refreshShotWorkflowState } from "@/lib/storyboard/shot-workflow";
 
 type ShotAssetType =
   | "first_frame"
@@ -137,6 +138,8 @@ export async function PUT(
       }
     }
   }
+
+  await refreshShotWorkflowState(shotId);
 
   return NextResponse.json({ ok: true });
 }

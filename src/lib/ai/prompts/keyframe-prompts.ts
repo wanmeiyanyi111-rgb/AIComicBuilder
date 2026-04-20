@@ -17,7 +17,8 @@ export function buildKeyframePromptsRequest(
     description?: string | null;
     visualHint?: string | null;
   }>,
-  visualStyle?: string
+  visualStyle?: string,
+  ratio?: string
 ): string {
   const charDescriptions = characters
     .map(
@@ -35,5 +36,6 @@ export function buildKeyframePromptsRequest(
     )
     .join("\n\n");
 
-  return `${visualStyle ? `视觉风格: ${visualStyle}\n\n` : ""}角色:\n${charDescriptions}\n\n分镜:\n${shotDescriptions}`;
+  const ratioLine = ratio ? `\n\n当前输出画幅要求: ${ratio}` : "";
+  return `${visualStyle ? `视觉风格: ${visualStyle}` : ""}${ratioLine}\n\n角色:\n${charDescriptions}\n\n分镜:\n${shotDescriptions}`;
 }

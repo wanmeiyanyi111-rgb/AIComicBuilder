@@ -15,6 +15,7 @@ import { shotAssets, shots } from "@/lib/db/schema";
 import { activateAssetVersion } from "@/lib/shot-asset-utils";
 import { and, eq } from "drizzle-orm";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
+import { refreshShotWorkflowState } from "@/lib/storyboard/shot-workflow";
 
 export async function POST(
   request: Request,
@@ -50,6 +51,7 @@ export async function POST(
     target.sequenceInType,
     target.assetVersion
   );
+  await refreshShotWorkflowState(target.shotId);
 
   return NextResponse.json({ ok: true });
 }

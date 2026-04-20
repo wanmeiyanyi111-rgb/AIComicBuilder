@@ -30,5 +30,6 @@ Content quality:
 - Respect user-specified art style if given; otherwise infer the most fitting style from the concept.
 - CHARACTERS section must cover every named character with all 5 required fields — downstream AI image generators rely on these to produce consistent visuals.
 - Each scene description must be vivid enough for an AI image generator to produce a frame directly.
+- If the concept includes short-drama timing or beat planning, keep pacing tight: hook fast, escalate conflict quickly, and land on a strong cliffhanger ending.
 - Write RICHLY and in DETAIL — every scene needs specific visual descriptions, character actions, emotional beats, and dialogue. Avoid rushing through the story.`;
 }

@@ -1,24 +1,19 @@
 export function buildShotSplitSystem(maxDuration: number): string {
-  const minDuration = Math.min(8, maxDuration);
+  const preferredMaxDuration = Math.max(12, Math.min(14, maxDuration));
+  const minDuration = Math.min(10, preferredMaxDuration);
+  const actionMaxDuration = Math.min(11, preferredMaxDuration);
+  const emotionMinDuration = Math.min(11, preferredMaxDuration);
+  const emotionMaxDuration = Math.min(13, preferredMaxDuration);
+  const atmosphereMinDuration = Math.min(12, preferredMaxDuration);
+  const proportionalTiers = [
+    `- ${minDuration}-${actionMaxDuration}s 镜头：动作驱动型，聚焦单一主动作、明确位移、快速反应。`,
+    `- ${emotionMinDuration}-${emotionMaxDuration}s 镜头：对白/情绪型，允许停顿、反应、压迫感和表演层次。`,
+    `- ${atmosphereMinDuration}-${preferredMaxDuration}s 镜头：建立/揭示/悬念型，强调空间信息、氛围铺垫和缓慢镜头语言。`,
+  ].join("\n");
 
-  // Build proportional difference tiers
-  let proportionalTiers: string;
-  if (maxDuration <= 8) {
-    proportionalTiers = `- ${minDuration}-${maxDuration}s 镜头：变化幅度应与时长成正比`;
-  } else {
-    const tier1End = Math.round(maxDuration * 0.6);
-    const tier2End = Math.round(maxDuration * 0.85);
-    const tier2Start = tier1End + 1;
-    const tier3Start = tier2End + 1;
-    proportionalTiers =
-      `- ${minDuration}-${tier1End}s 镜头：细微到中等变化（轻微转头、表情变化、小幅机位移动）\n` +
-      `- ${tier2Start}-${tier2End}s 镜头：中等变化（角色移动位置、明显表情变化、清晰的机位运动）\n` +
-      `- ${tier3Start}-${maxDuration}s 镜头：显著变化（角色穿越画面、重大动作完成、大幅度机位运动）`;
-  }
+  return `你是一位经验丰富的分镜导演和摄影指导，专精漫剧四宫格分镜制作。你规划的镜头列表视觉效果丰富、叙事高效，并针对“四宫格生图 → 视频提示词 → 内部分段视频生成”的管线进行优化。
 
-  return `你是一位经验丰富的分镜导演和摄影指导，专精动画短片制作。你规划的镜头列表视觉效果丰富、叙事高效，并针对 AI 视频生成管线（首帧 → 末帧 → 插值视频）进行优化。
-
-你的任务：将剧本拆解为精确的镜头列表，每个镜头对应一段 5-15 秒的 AI 生成视频片段。将镜头按场景分组，同一场景共享相同的地点/环境设定。
+你的任务：将剧本拆解为精确的镜头列表，每个镜头对应一段 ${minDuration}-${preferredMaxDuration} 秒的四宫格剧情段落。将镜头按场景分组，同一场景共享相同的地点/环境设定。
 
 输出一个场景的 JSON 数组。每个场景将共享同一地点/环境的相关镜头分组：
 [
@@ -34,7 +29,7 @@ export function buildShotSplitSystem(maxDuration: number): string {
         "endFrame": "AI 图像生成用的详细末帧描述（参见下方要求）",
         "motionScript": "完整的动作脚本，描述从首帧到末帧之间发生的动作",
         "videoScript": "简洁的 1-2 句运动描述，供视频生成模型使用（参见下方要求）",
-        "duration": ${minDuration}-${maxDuration},
+        "duration": ${minDuration}-${preferredMaxDuration},
         "dialogues": [
           {
             "character": "准确的角色名称",
@@ -156,15 +151,15 @@ export function buildShotSplitSystem(maxDuration: number): string {
 - 构图必须作为独立画面成立
 
 === motionScript 要求 ===
-- 按时间分段叙述："0-2s: [动作]。2-4s: [动作]。4-6s: [动作]。..."
-- 严格规则：每段最长 3 秒。10 秒镜头 = 至少 4 段。绝不允许超过 3 秒的段落。
+- 按时间分段叙述："0-3s: [动作]。3-6s: [动作]。6-9s: [动作]。9-12s: [动作]。..."
+- 严格规则：每段建议 2-3 秒。10-12 秒镜头通常写 4 段；13-14 秒镜头通常写 4-5 段。绝不允许把整段动作压成一句笼统描述。
 - 每段是一个信息密集的句子（50-80 词），同时交织四个层面：
   • 角色：精确的身体部位运动——指节发白、筋腱绷起、瞳孔收缩、屏息、咬紧牙关；指定速度和力度
   • 环境：世界的反应——地面裂纹蔓延、灯柱弯折、火花斜向飞溅、黑烟翻滚随风卷动、碎片轨迹
   • 机位：精确的镜头类型 + 运动 + 速度——"机位猛降至地面超广角并急速上升" / "机位保持特写然后快速横摇"
   • 物理/氛围：材质细节——金属断裂声、空气中的冲击波纹、热变形、光色温变化、粒子行为
 - 反面示例（太模糊、太长）："0-6s: 巨兽挥爪摧毁街道。镜头推进。"
-- 正面示例（具体、最长 3s）："0-2s: 铁兽右前足猛然落地，发出震骨的闷响，冲击点向外辐射六米的蛛网状裂纹，三组机械爪同时扬起拖曳液压雾气，传感眼脉动深红；机位低角度广角，缓慢上摇。2-4s: 前导爪以亚音速横扫，在蓝白火花爆发中切断灯柱中段，切断的顶部以 45 度旋飞，沥青碎块和金属碎片向下飞散；机位保持中景然后猛推。4-6s: 破裂管道的黑烟在热冲击波中翻卷铺展，碎片仍在落下，巨兽传感眼锁定下一个目标发出高频液压尖啸；机位在低角度缓慢右环绕，定格于巨兽剪影。"
+- 正面示例（具体、适合 6s 镜头）："0-2s: 铁兽右前足猛然落地，发出震骨的闷响，冲击点向外辐射六米的蛛网状裂纹，三组机械爪同时扬起拖曳液压雾气，传感眼脉动深红；机位低角度广角，缓慢上摇。2-4s: 前导爪以亚音速横扫，在蓝白火花爆发中切断灯柱中段，切断的顶部以 45 度旋飞，沥青碎块和金属碎片向下飞散；机位保持中景然后猛推。4-6s: 破裂管道的黑烟在热冲击波中翻卷铺展，碎片仍在落下，巨兽传感眼锁定下一个目标发出高频液压尖啸；机位在低角度缓慢右环绕，定格于巨兽剪影。"
 
 === videoScript 要求 ===
 - 用途：视频生成模型的主要输入——驱动所有运动；必须是自然的 Seedance 风格散文
@@ -210,7 +205,9 @@ ${proportionalTiers}
 - 在动作中切换——在允许平滑过渡到下一镜头的时刻结束每个镜头
 - 保持视线匹配——在镜头之间维持一致的画面方向
 - 180 度规则——保持角色在画面中位于一致的一侧
-- 时长：所有镜头必须为 ${minDuration}-${maxDuration}s。对白密集型 = ${Math.min(maxDuration, 12)}-${maxDuration}s；动作镜头 = ${minDuration}-${Math.min(maxDuration, 12)}s；建立镜头 = ${minDuration}-${Math.min(maxDuration, 10)}s
+- 时长：所有镜头必须为 ${minDuration}-${preferredMaxDuration}s。动作镜头优先 ${minDuration}-${actionMaxDuration}s；对白/情绪镜头优先 ${emotionMinDuration}-${emotionMaxDuration}s；建立/氛围/揭示镜头优先 ${atmosphereMinDuration}-${preferredMaxDuration}s
+- 这是四宫格分镜规划时长，不是底层视频模型的单次提交时长。后续视频生成可在内部拆成更短片段，但这里的镜头 duration 必须保持剧情段落级别的时长。
+- 如果一个镜头想表达两个以上主动作，或既要大位移又要强表演又要复杂运镜，必须拆成多个连续镜头，而不是把 duration 拉长到失控
 - 连续性：第 N 个镜头的 endFrame 必须与第 N+1 个镜头的 startFrame 在逻辑上衔接（相同角色、一致环境、自然的位置过渡）
 - 覆盖性：剧本中每个场景至少生成一个镜头。不得跳过或合并场景。如果场景复杂，应拆分为多个镜头。每个场景标记（SCENE N）必须产生至少一个镜头。
 
@@ -230,7 +227,7 @@ ${proportionalTiers}
 仅输出 JSON 数组。不要使用 markdown 代码块。不要添加任何评论。`;
 }
 
-export const SHOT_SPLIT_SYSTEM = buildShotSplitSystem(15);
+export const SHOT_SPLIT_SYSTEM = buildShotSplitSystem(14);
 
 export function buildShotSplitPrompt(
   screenplay: string,

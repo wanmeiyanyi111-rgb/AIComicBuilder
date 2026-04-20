@@ -8,7 +8,10 @@ import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { addImportLog } from "@/lib/import-utils";
 import { db } from "@/lib/db";
 import { episodes, visualAssets } from "@/lib/db/schema";
-import { id as genId } from "@/lib/id";
+import {
+  ensureEpisodeVisualAsset,
+  normalizeScopedResourceName,
+} from "@/lib/episode-resources";
 import type { ModelConfig } from "../../generate/types";
 import { buildProjectStyleHint } from "../helpers";
 
@@ -16,6 +19,15 @@ type CandidateItem = {
   name: string;
   prompt: string;
 };
+
+type ExtractionResult = {
+  scenes?: unknown[];
+  props?: unknown[];
+  sceneCandidates?: unknown[];
+  propCandidates?: unknown[];
+};
+
+type ExtractionKind = "scenes" | "props";
 
 function normalizeText(value: string): string {
   return value.trim().replace(/\s+/g, " ");
@@ -61,21 +73,133 @@ function dedupeCandidates(items: CandidateItem[]): CandidateItem[] {
   return output;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeForMatch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[\s"'`“”‘’《》〈〉【】（）()\[\]、，。！？；：:,.!?/\\\-_=+]/g, "");
+}
+
+function countNameOccurrences(script: string, name: string): number {
+  const normalizedName = normalizeText(name);
+  if (!normalizedName) return 0;
+
+  const regex = new RegExp(escapeRegExp(normalizedName), "giu");
+  const directMatches = script.match(regex)?.length ?? 0;
+  if (directMatches > 0) return directMatches;
+
+  const compactScript = normalizeForMatch(script);
+  const compactName = normalizeForMatch(normalizedName);
+  if (!compactName) return 0;
+
+  let count = 0;
+  let startIndex = 0;
+  while (startIndex < compactScript.length) {
+    const index = compactScript.indexOf(compactName, startIndex);
+    if (index < 0) break;
+    count += 1;
+    startIndex = index + compactName.length;
+  }
+  return count;
+}
+
+function filterRecurringProps(items: CandidateItem[], script: string): CandidateItem[] {
+  const recurring = items.filter((item) => countNameOccurrences(script, item.name) >= 2);
+  return recurring;
+}
+
 function buildExtractionInput(
   script: string,
   maxScenes: number,
   maxProps: number,
-  projectStyleHint: string
+  projectStyleHint: string,
+  kind: ExtractionKind
 ): string {
   return [
     `提取数量上限：场景 ${maxScenes} 条，道具 ${maxProps} 条。`,
     projectStyleHint ? `项目风格信息：${projectStyleHint}` : "",
     "硬性要求：每条 scene/prop 的 prompt 必须明确包含与项目风格一致的画风、材质、光照和色彩线索，禁止只写物体名；场景还必须带景别/机位/焦段等镜头语言。",
+    kind === "scenes"
+      ? "本轮只提取 scenes。props 必须返回空数组 []。优先覆盖关键物理场景，不要输出道具。"
+      : "本轮只提取 props。scenes 必须返回空数组 []。优先提取可单独成图、对白底或可抠图的关键道具，不要输出场景。只保留反复出现、推动剧情、作为证据/象征物/标志性物件持续复用的道具；一次性路过的小物件、餐具、普通陈设、只出现一次就消失的消耗品不要提取。",
     "剧本：",
     script,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function parseExtractionResult(text: string): ExtractionResult {
+  return JSON.parse(extractJSON(text)) as ExtractionResult;
+}
+
+async function runExtractionPass(params: {
+  model: ReturnType<typeof createLanguageModel>;
+  systemPrompt: string;
+  prompt: string;
+  kind: ExtractionKind;
+  projectId: string;
+  shouldLogImport: boolean;
+}): Promise<ExtractionResult> {
+  const { model, systemPrompt, prompt, kind, projectId, shouldLogImport } = params;
+  const jsonMode = {
+    openai: { response_format: { type: "json_object" } },
+  };
+
+  const firstPass = await generateText({
+    model,
+    system: systemPrompt,
+    temperature: 0.2,
+    maxOutputTokens: 2200,
+    providerOptions: jsonMode,
+    prompt,
+  });
+
+  try {
+    return parseExtractionResult(firstPass.text);
+  } catch (firstError) {
+    console.error(
+      `[ScenePropExtract:${kind}] JSON parse failed on first pass. Raw:\n${firstPass.text.slice(0, 1600)}`
+    );
+    if (shouldLogImport) {
+      await addImportLog(
+        projectId,
+        3,
+        "running",
+        `${kind === "scenes" ? "场景" : "道具"}候选解析失败，正在重试紧凑 JSON 输出...`
+      );
+    }
+
+    const retry = await generateText({
+      model,
+      system: systemPrompt,
+      temperature: 0.1,
+      maxOutputTokens: 2200,
+      providerOptions: jsonMode,
+      prompt: [
+        prompt,
+        "",
+        "IMPORTANT:",
+        "- Return COMPLETE, VALID JSON only.",
+        "- Do not include any explanation before or after the JSON object.",
+        "- Use compact JSON with minimal whitespace and no markdown fences.",
+        `- ${kind === "scenes" ? "scenes" : "props"} must contain the extracted results for this pass.`,
+        `- ${kind === "scenes" ? "props" : "scenes"} must be [].`,
+      ].join("\n"),
+    });
+
+    try {
+      return parseExtractionResult(retry.text);
+    } catch {
+      console.error(
+        `[ScenePropExtract:${kind}] JSON parse failed on retry. Raw:\n${retry.text.slice(0, 1600)}`
+      );
+      throw firstError;
+    }
+  }
 }
 
 export async function POST(
@@ -143,17 +267,38 @@ export async function POST(
     userId: ownedProject.userId,
     projectId,
   });
-  const { text } = await generateText({
-    model,
-    system: systemPrompt,
-    temperature: 0.2,
-    maxOutputTokens: 1800,
-    prompt: buildExtractionInput(script, maxScenes, maxProps, projectStyleHint),
-  });
 
-  let parsed: { scenes?: unknown[]; props?: unknown[] };
+  let sceneParsed: ExtractionResult;
+  let propParsed: ExtractionResult;
   try {
-    parsed = JSON.parse(extractJSON(text)) as { scenes?: unknown[]; props?: unknown[] };
+    sceneParsed = await runExtractionPass({
+      model,
+      systemPrompt,
+      kind: "scenes",
+      projectId,
+      shouldLogImport,
+      prompt: buildExtractionInput(
+        script,
+        maxScenes,
+        maxProps,
+        projectStyleHint,
+        "scenes"
+      ),
+    });
+    propParsed = await runExtractionPass({
+      model,
+      systemPrompt,
+      kind: "props",
+      projectId,
+      shouldLogImport,
+      prompt: buildExtractionInput(
+        script,
+        maxScenes,
+        maxProps,
+        projectStyleHint,
+        "props"
+      ),
+    });
   } catch {
     if (shouldLogImport) {
       await addImportLog(projectId, 3, "error", "场景/道具提取失败：模型输出解析失败");
@@ -165,18 +310,31 @@ export async function POST(
   }
 
   const scenes = dedupeCandidates(
-    (Array.isArray(parsed.scenes) ? parsed.scenes : [])
+    (
+      Array.isArray(sceneParsed.scenes)
+        ? sceneParsed.scenes
+        : Array.isArray(sceneParsed.sceneCandidates)
+          ? sceneParsed.sceneCandidates
+          : []
+    )
       .map((item, index) => normalizeCandidate(item, "场景", index))
       .filter((item): item is CandidateItem => !!item)
       .slice(0, maxScenes)
   );
 
-  const props = dedupeCandidates(
-    (Array.isArray(parsed.props) ? parsed.props : [])
+  const rawProps = dedupeCandidates(
+    (
+      Array.isArray(propParsed.props)
+        ? propParsed.props
+        : Array.isArray(propParsed.propCandidates)
+          ? propParsed.propCandidates
+          : []
+    )
       .map((item, index) => normalizeCandidate(item, "道具", index))
       .filter((item): item is CandidateItem => !!item)
       .slice(0, maxProps)
   );
+  const props = filterRecurringProps(rawProps, script).slice(0, maxProps);
 
   const scopeCondition = episodeId
     ? eq(visualAssets.episodeId, episodeId)
@@ -199,8 +357,7 @@ export async function POST(
     ])
   );
 
-  const now = new Date();
-  const inserts: Array<typeof visualAssets.$inferInsert> = [];
+  const createdRows: Array<{ type: "scene" | "prop"; id: string; reusedSourceId?: string }> = [];
   const updates: Array<{ id: string; type: "scene" | "prop"; prompt: string }> = [];
 
   for (const item of scenes) {
@@ -212,24 +369,27 @@ export async function POST(
       }
       continue;
     }
-    existingByKey.set(key, {
-      id: "",
-      type: "scene",
-      name: item.name,
-      prompt: item.prompt,
-    });
-    inserts.push({
-      id: genId(),
+    const result = await ensureEpisodeVisualAsset({
       projectId,
       episodeId,
       type: "scene",
-      name: item.name,
+      name: normalizeScopedResourceName(item.name),
       prompt: item.prompt,
-      status: "pending",
-      errorMessage: "",
-      createdAt: now,
-      updatedAt: now,
+      updatePromptIfExists: false,
     });
+    existingByKey.set(key, {
+      id: result.asset.id,
+      type: "scene",
+      name: result.asset.name,
+      prompt: result.asset.prompt,
+    });
+    if (result.created) {
+      createdRows.push({
+        type: "scene",
+        id: result.asset.id,
+        reusedSourceId: result.reusedSourceId,
+      });
+    }
   }
 
   for (const item of props) {
@@ -241,30 +401,30 @@ export async function POST(
       }
       continue;
     }
-    existingByKey.set(key, {
-      id: "",
-      type: "prop",
-      name: item.name,
-      prompt: item.prompt,
-    });
-    inserts.push({
-      id: genId(),
+    const result = await ensureEpisodeVisualAsset({
       projectId,
       episodeId,
       type: "prop",
-      name: item.name,
+      name: normalizeScopedResourceName(item.name),
       prompt: item.prompt,
-      status: "pending",
-      errorMessage: "",
-      createdAt: now,
-      updatedAt: now,
+      updatePromptIfExists: false,
     });
-  }
-
-  if (inserts.length > 0) {
-    await db.insert(visualAssets).values(inserts);
+    existingByKey.set(key, {
+      id: result.asset.id,
+      type: "prop",
+      name: result.asset.name,
+      prompt: result.asset.prompt,
+    });
+    if (result.created) {
+      createdRows.push({
+        type: "prop",
+        id: result.asset.id,
+        reusedSourceId: result.reusedSourceId,
+      });
+    }
   }
   if (updates.length > 0) {
+    const now = new Date();
     for (const item of updates) {
       await db
         .update(visualAssets)
@@ -278,20 +438,28 @@ export async function POST(
       projectId,
       3,
       "done",
-      `场景/道具提取完成：场景 ${scenes.length}，道具 ${props.length}，新增 ${inserts.length}，更新 ${updates.length}`,
-      { scenes, props, created: inserts.length, updated: updates.length }
+      `场景/道具提取完成：场景 ${scenes.length}，道具 ${props.length}，新增 ${createdRows.length}，更新 ${updates.length}`,
+      {
+        scenes,
+        props,
+        filteredSingleUseProps: Math.max(0, rawProps.length - props.length),
+        created: createdRows.length,
+        reusedFromOtherEpisode: createdRows.filter((item) => !!item.reusedSourceId).length,
+        updated: updates.length,
+      }
     );
   }
 
-  const createdScenes = inserts.filter((item) => item.type === "scene").length;
-  const createdProps = inserts.filter((item) => item.type === "prop").length;
+  const createdScenes = createdRows.filter((item) => item.type === "scene").length;
+  const createdProps = createdRows.filter((item) => item.type === "prop").length;
   const updatedScenes = updates.filter((item) => item.type === "scene").length;
   const updatedProps = updates.filter((item) => item.type === "prop").length;
 
   return NextResponse.json({
     extractedScenes: scenes.length,
     extractedProps: props.length,
-    created: inserts.length,
+    filteredSingleUseProps: Math.max(0, rawProps.length - props.length),
+    created: createdRows.length,
     createdScenes,
     createdProps,
     updated: updates.length,

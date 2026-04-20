@@ -9,8 +9,11 @@ import { insertAssetVersion } from "@/lib/shot-asset-utils";
 import { buildKeyframePromptsRequest } from "@/lib/ai/prompts/keyframe-prompts";
 import {
   buildVisualStyleFromScript,
+  enforceFramePromptRatio,
+  enforceVisualStyleRatio,
   getEpisodeCharacters,
   getScriptForScope,
+  ratioToDisplayLabel,
 } from "../helpers";
 import type { ModelConfig } from "../types";
 
@@ -55,10 +58,14 @@ export async function handleGenerateKeyframePrompts(
   }
 
   const projectCharacters = await getEpisodeCharacters(projectId, episodeId);
+  const ratio = (payload?.ratio as string) || "16:9";
 
   // Pull visual style meta from script (same parser as ref prompts handler)
   const script = await getScriptForScope(projectId, episodeId);
-  const visualStyle = buildVisualStyleFromScript(script);
+  const visualStyle = enforceVisualStyleRatio(
+    buildVisualStyleFromScript(script),
+    ratio
+  );
 
   // Load character relationships — drives on-screen interaction framing.
   // Enemies must face each other as live combatants, not background icons.
@@ -113,7 +120,8 @@ export async function handleGenerateKeyframePrompts(
             description: c.description,
             visualHint: c.visualHint,
           })),
-          visualStyle
+          visualStyle,
+          ratioToDisplayLabel(ratio)
         );
         const promptRequest = kfRelationsText ? basePromptRequest + kfRelationsText : basePromptRequest;
 
@@ -135,6 +143,10 @@ export async function handleGenerateKeyframePrompts(
         if (!entry || !Array.isArray(entry.prompts) || entry.prompts.length < 2) {
           throw new Error(`Shot ${shot.sequence}: expected 2 prompts (first/last frame)`);
         }
+        const normalizedPrompts = [
+          enforceFramePromptRatio(entry.prompts[0], ratio),
+          enforceFramePromptRatio(entry.prompts[1], ratio),
+        ];
 
         // Use LLM-provided per-shot character list (only visible chars in this shot).
         // Fall back to empty array if LLM omitted the field — never default to all chars.
@@ -143,7 +155,7 @@ export async function handleGenerateKeyframePrompts(
           shotId: shot.id,
           type: "first_frame",
           sequenceInType: 0,
-          prompt: entry.prompts[0],
+          prompt: normalizedPrompts[0],
           status: "pending",
           characters: charsForShot,
         });
@@ -151,7 +163,7 @@ export async function handleGenerateKeyframePrompts(
           shotId: shot.id,
           type: "last_frame",
           sequenceInType: 0,
-          prompt: entry.prompts[1],
+          prompt: normalizedPrompts[1],
           status: "pending",
           characters: charsForShot,
         });

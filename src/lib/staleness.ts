@@ -17,7 +17,7 @@ export async function markDownstreamStale(
   if (entityType === "episode") {
     await db
       .update(shots)
-      .set({ isStale: 1 })
+      .set({ isStale: 1, workflowState: "{}" })
       .where(eq(shots.episodeId, entityId));
     await db
       .update(characters)
@@ -26,7 +26,7 @@ export async function markDownstreamStale(
   } else {
     await db
       .update(shots)
-      .set({ isStale: 1 })
+      .set({ isStale: 1, workflowState: "{}" })
       .where(eq(shots.projectId, entityId));
     await db
       .update(characters)

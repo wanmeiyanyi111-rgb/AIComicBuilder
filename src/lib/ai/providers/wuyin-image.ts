@@ -1,162 +1,30 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { id as genId } from "@/lib/id";
 import type { AIProvider, ImageOptions, TextOptions } from "../types";
-
-type WuyinTaskState = "queued" | "processing" | "succeeded" | "failed";
-
-type WuyinImageTaskResult = {
-  state: WuyinTaskState;
-  imageUrl: string;
-  imageBase64: string;
-  failReason: string;
-};
-
-type WuyinReferenceMode =
-  | "none"
-  | "image_urls"
-  | "reduced_image_urls"
-  | "prompt_only_fallback";
-
-const DEFAULT_BASE_URL = "https://api.wuyinkeji.com";
-const DEFAULT_CREATE_ENDPOINT = "/api/async/image_nanoBanana2";
-const DEFAULT_DETAIL_ENDPOINT = "/api/async/detail";
-
-function getRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function firstNonEmptyString(values: unknown[]): string {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
-}
-
-function normalizeTaskState(statusValue: unknown): WuyinTaskState {
-  if (typeof statusValue === "number") {
-    if (statusValue === 1) return "processing";
-    if (statusValue === 2) return "succeeded";
-    if (statusValue === 3) return "failed";
-    return "queued";
-  }
-
-  if (typeof statusValue === "string") {
-    const normalized = statusValue.trim().toLowerCase();
-    if (
-      normalized === "success" ||
-      normalized === "succeeded" ||
-      normalized === "completed" ||
-      normalized === "done"
-    ) {
-      return "succeeded";
-    }
-    if (
-      normalized === "fail" ||
-      normalized === "failed" ||
-      normalized === "error"
-    ) {
-      return "failed";
-    }
-    if (
-      normalized === "running" ||
-      normalized === "processing" ||
-      normalized === "in_progress"
-    ) {
-      return "processing";
-    }
-  }
-
-  return "queued";
-}
-
-function extractImageUrlCandidates(data: Record<string, unknown>): string {
-  const direct = firstNonEmptyString([
-    data.remote_url,
-    data.remoteUrl,
-    data.image_url,
-    data.imageUrl,
-    data.result_url,
-    data.resultUrl,
-    data.output_url,
-    data.outputUrl,
-    data.file_url,
-    data.fileUrl,
-    data.cdn_url,
-    data.cdnUrl,
-  ]);
-  if (direct) return direct;
-
-  if (Array.isArray(data.urls)) {
-    const fromUrls = firstNonEmptyString(data.urls);
-    if (fromUrls) return fromUrls;
-  }
-
-  if (Array.isArray(data.images)) {
-    for (const item of data.images) {
-      const record = getRecord(item);
-      const imageUrl = firstNonEmptyString(
-        record
-          ? [
-              record.remote_url,
-              record.remoteUrl,
-              record.url,
-              record.image_url,
-              record.imageUrl,
-            ]
-          : []
-      );
-      if (imageUrl) return imageUrl;
-    }
-  }
-
-  if (Array.isArray(data.result)) {
-    const fromResult = firstNonEmptyString(data.result);
-    if (fromResult) return fromResult;
-
-    for (const item of data.result) {
-      const record = getRecord(item);
-      const resultUrl = firstNonEmptyString(
-        record
-          ? [
-              record.remote_url,
-              record.remoteUrl,
-              record.url,
-              record.image_url,
-              record.imageUrl,
-            ]
-          : []
-      );
-      if (resultUrl) return resultUrl;
-    }
-  }
-
-  return "";
-}
-
-function extractImageBase64Candidates(data: Record<string, unknown>): string {
-  return firstNonEmptyString([
-    data.image_base64,
-    data.imageBase64,
-    data.base64,
-    data.result_base64,
-    data.resultBase64,
-  ]);
-}
-
-function normalizeBaseUrl(baseUrl?: string | null) {
-  return (baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, "");
-}
-
-function parsePositiveInt(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value || "", 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
+import {
+  clampPositiveInt,
+  DEFAULT_BASE_URL,
+  DEFAULT_CREATE_ENDPOINT,
+  DEFAULT_DETAIL_ENDPOINT,
+  DEFAULT_REF_MAX_BYTES,
+  DEFAULT_REF_MAX_DIMENSION,
+  describeFetchError,
+  extractImageBase64Candidates,
+  extractImageUrlCandidates,
+  firstNonEmptyString,
+  getRecord,
+  normalizeBaseUrl,
+  normalizeTaskState,
+  parsePositiveInt,
+} from "./wuyin-image-utils";
+import type {
+  WuyinImageTaskResult,
+  WuyinReferenceMode,
+  WuyinTaskState,
+} from "./wuyin-image-utils";
 
 export class WuyinImageProvider implements AIProvider {
   private readonly apiKey: string;
@@ -166,6 +34,9 @@ export class WuyinImageProvider implements AIProvider {
   private readonly detailEndpoint: string;
   private readonly pollIntervalMs: number;
   private readonly pollMaxAttempts: number;
+  private readonly pollTimeoutMs: number;
+  private readonly refMaxDimension: number;
+  private readonly refMaxBytes: number;
 
   constructor(params?: {
     apiKey?: string;
@@ -175,6 +46,9 @@ export class WuyinImageProvider implements AIProvider {
     detailEndpoint?: string;
     pollIntervalMs?: number;
     pollMaxAttempts?: number;
+    pollTimeoutMs?: number;
+    refMaxDimension?: number;
+    refMaxBytes?: number;
   }) {
     this.apiKey =
       params?.apiKey?.trim() || process.env.WUYINKEJI_API_KEY?.trim() || "";
@@ -199,6 +73,30 @@ export class WuyinImageProvider implements AIProvider {
         params?.pollMaxAttempts ??
           parsePositiveInt(process.env.WUYINKEJI_IMAGE_POLL_MAX_ATTEMPTS, 80)
       )
+    );
+    this.pollTimeoutMs = clampPositiveInt(
+      params?.pollTimeoutMs ??
+        parsePositiveInt(process.env.WUYINKEJI_IMAGE_TIMEOUT_MS, 10 * 60 * 1000),
+      30_000,
+      30 * 60 * 1000
+    );
+    this.refMaxDimension = clampPositiveInt(
+      params?.refMaxDimension ??
+        parsePositiveInt(
+          process.env.WUYINKEJI_REFERENCE_MAX_DIMENSION,
+          DEFAULT_REF_MAX_DIMENSION
+        ),
+      128,
+      2048
+    );
+    this.refMaxBytes = clampPositiveInt(
+      params?.refMaxBytes ??
+        parsePositiveInt(
+          process.env.WUYINKEJI_REFERENCE_MAX_BYTES,
+          DEFAULT_REF_MAX_BYTES
+        ),
+      8 * 1024,
+      2 * 1024 * 1024
     );
   }
 
@@ -253,6 +151,7 @@ export class WuyinImageProvider implements AIProvider {
       allReferences,
       allReferences.slice(0, 2),
       allReferences.slice(0, 1),
+      [],
     ].filter(
       (plan, index, plans) =>
         plan.length > 0 &&
@@ -261,11 +160,22 @@ export class WuyinImageProvider implements AIProvider {
         ) === index
     );
 
+    if (!retryPlans.some((plan) => plan.length === 0)) {
+      retryPlans.push([]);
+    }
+
     let lastErrorMessage = "unknown error";
     for (let index = 0; index < retryPlans.length; index += 1) {
       const refs = retryPlans[index];
       try {
-        return await runTask(refs, index === 0 ? "image_urls" : "reduced_image_urls");
+        return await runTask(
+          refs,
+          refs.length === 0
+            ? "prompt_only"
+            : index === 0
+              ? "image_urls"
+              : "reduced_image_urls"
+        );
       } catch (err) {
         lastErrorMessage = err instanceof Error ? err.message : String(err);
         console.warn(
@@ -274,24 +184,30 @@ export class WuyinImageProvider implements AIProvider {
       }
     }
 
-    console.warn(
-      `[WuyinImage] retrying prompt-only fallback, last error: ${lastErrorMessage}`
+    throw new Error(
+      `Wuyin reference image request failed after ${retryPlans.length} attempts: ${lastErrorMessage}`
     );
-    return runTask([], "prompt_only_fallback");
   }
 
   private async createAsyncTask(payload: Record<string, unknown>): Promise<string> {
     const url = new URL(this.createEndpoint, this.baseUrl);
     url.searchParams.set("key", this.apiKey);
 
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: {
-        Authorization: this.apiKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        method: "POST",
+        headers: {
+          Authorization: this.apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+    } catch (error) {
+      throw new Error(
+        `Wuyin async task create network error (${url.origin}${this.createEndpoint}): ${describeFetchError(error)}`
+      );
+    }
 
     const rawText = await response.text();
     const raw = rawText ? (JSON.parse(rawText) as unknown) : null;
@@ -334,14 +250,23 @@ export class WuyinImageProvider implements AIProvider {
   private async pollImageTask(taskId: string): Promise<WuyinImageTaskResult> {
     let lastFailureReason = "";
     const startedAt = Date.now();
+    let lastObservedState: WuyinTaskState = "queued";
+    const effectiveMaxAttempts = Math.min(
+      600,
+      Math.max(
+        this.pollMaxAttempts,
+        Math.ceil(this.pollTimeoutMs / this.pollIntervalMs) + 1
+      )
+    );
 
-    for (let attempt = 0; attempt < this.pollMaxAttempts; attempt += 1) {
+    for (let attempt = 0; attempt < effectiveMaxAttempts; attempt += 1) {
       if (attempt > 0) {
         await this.sleep(this.pollIntervalMs);
       }
 
       const detailRaw = await this.fetchAsyncDetail(taskId);
       const result = this.parseImageTaskResult(detailRaw);
+      lastObservedState = result.state;
 
       if (result.state === "failed") {
         throw new Error(result.failReason || "Wuyin image generation failed");
@@ -355,12 +280,16 @@ export class WuyinImageProvider implements AIProvider {
         }
         return result;
       }
+
+      if (Date.now() - startedAt >= this.pollTimeoutMs) {
+        break;
+      }
     }
 
     const elapsedSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
     throw new Error(
       lastFailureReason ||
-        `Wuyin image generation timed out after ${this.pollMaxAttempts} attempts (~${elapsedSeconds}s), taskId=${taskId}`
+        `Wuyin image generation timed out after ${effectiveMaxAttempts} attempts (~${elapsedSeconds}s, state=${lastObservedState}), taskId=${taskId}`
     );
   }
 
@@ -369,11 +298,18 @@ export class WuyinImageProvider implements AIProvider {
     url.searchParams.set("key", this.apiKey);
     url.searchParams.set("id", taskId);
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        Authorization: this.apiKey,
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), {
+        headers: {
+          Authorization: this.apiKey,
+        },
+      });
+    } catch (error) {
+      throw new Error(
+        `Wuyin detail request network error (${url.origin}${this.detailEndpoint}): ${describeFetchError(error)}`
+      );
+    }
     const rawText = await response.text();
     const raw = rawText ? (JSON.parse(rawText) as unknown) : null;
     if (!response.ok) {
@@ -402,13 +338,102 @@ export class WuyinImageProvider implements AIProvider {
   }
 
   private toWuyinReferenceInput(imagePathOrUrl: string): string {
-    const normalized = this.toImageInputUrl(imagePathOrUrl);
+    const normalized = imagePathOrUrl.trim();
     if (!normalized) return "";
+    if (/^https?:\/\//i.test(normalized)) {
+      return normalized;
+    }
     if (/^data:image\//i.test(normalized)) {
       const match = normalized.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
       return (match?.[1] || "").trim();
     }
-    return normalized;
+
+    const resolved = path.resolve(normalized);
+    if (!fs.existsSync(resolved)) return "";
+
+    const prepared = this.prepareLocalReferenceForWuyin(resolved);
+    if (prepared) {
+      return prepared;
+    }
+
+    const fallback = this.toImageInputUrl(resolved);
+    if (!fallback) return "";
+    const match = fallback.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+    return (match?.[1] || "").trim();
+  }
+
+  private prepareLocalReferenceForWuyin(resolvedPath: string): string {
+    const stats = fs.statSync(resolvedPath);
+    const compressed = this.compressReferenceImage(resolvedPath);
+    if (!compressed) {
+      if (stats.size > this.refMaxBytes) {
+        return "";
+      }
+      const original = this.toImageInputUrl(resolvedPath);
+      const match = original.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+      return (match?.[1] || "").trim();
+    }
+
+    const resizedStats = fs.statSync(compressed);
+    console.log(
+      `[WuyinImage] compressed local ref ${path.basename(resolvedPath)} ${Math.round(
+        stats.size / 1024
+      )}KB -> ${Math.round(resizedStats.size / 1024)}KB`
+    );
+    return fs.readFileSync(compressed).toString("base64");
+  }
+
+  private compressReferenceImage(resolvedPath: string): string {
+    const tempDir = path.join(os.tmpdir(), "aicomicbuilder-wuyin-refs");
+    fs.mkdirSync(tempDir, { recursive: true });
+    const outputPath = path.join(tempDir, `${genId()}.jpg`);
+
+    const ffmpegArgs = [
+      "-y",
+      "-i",
+      resolvedPath,
+      "-vf",
+      `scale=${this.refMaxDimension}:${this.refMaxDimension}:force_original_aspect_ratio=decrease`,
+      "-frames:v",
+      "1",
+      "-q:v",
+      "4",
+      outputPath,
+    ];
+
+    try {
+      execFileSync("ffmpeg", ffmpegArgs, { stdio: "ignore" });
+      if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+        return outputPath;
+      }
+    } catch (error) {
+      console.warn(
+        `[WuyinImage] ffmpeg ref compression failed for ${path.basename(resolvedPath)}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
+
+    if (process.platform === "darwin") {
+      try {
+        execFileSync(
+          "sips",
+          ["-s", "format", "jpeg", "-Z", String(this.refMaxDimension), resolvedPath, "--out", outputPath],
+          { stdio: "ignore" }
+        );
+        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+          return outputPath;
+        }
+      } catch (error) {
+        console.warn(
+          `[WuyinImage] sips ref compression failed for ${path.basename(resolvedPath)}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
+    }
+
+    return "";
   }
 
   private toImageInputUrl(imagePathOrUrl: string): string {
@@ -453,7 +478,14 @@ export class WuyinImageProvider implements AIProvider {
       return this.writeFromBase64(imageUrl);
     }
 
-    const response = await fetch(imageUrl);
+    let response: Response;
+    try {
+      response = await fetch(imageUrl);
+    } catch (error) {
+      throw new Error(
+        `Wuyin remote image fetch network error (${imageUrl}): ${describeFetchError(error)}`
+      );
+    }
     if (!response.ok) {
       throw new Error(`Wuyin remote image fetch failed (${response.status})`);
     }

@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { apiFetch } from "@/lib/api-fetch";
 
+import type { GenerationMode } from "./project-store";
+
 export interface Episode {
   id: string;
   projectId: string;
@@ -11,7 +13,25 @@ export interface Episode {
   description: string | null;
   keywords: string | null;
   status: string;
-  generationMode: "keyframe" | "reference";
+  generationMode: GenerationMode;
+  targetDuration?: number | null;
+  splitMeta?: {
+    storyMode?: string;
+    targetDurationSec?: number;
+    durationMinSec?: number;
+    durationMaxSec?: number;
+    estimatedDurationSec?: number;
+    hook?: string;
+    coreConflict?: string;
+    turningPoint?: string;
+    cliffhanger?: string;
+    pacingNotes?: string;
+    beats?: Array<{ name: string; durationSec: number; summary: string }>;
+    validationIssues?: string[];
+    scriptEstimatedDurationSec?: number;
+    scriptDurationStatus?: "short" | "ok" | "long";
+    scriptDurationNotes?: string[];
+  } | null;
   finalVideoUrl: string | null;
   previewImages?: string[];
   characters?: string[];
@@ -30,7 +50,12 @@ interface EpisodeStore {
   updateEpisode: (
     projectId: string,
     episodeId: string,
-    patch: Partial<Pick<Episode, "title" | "idea" | "script" | "status" | "generationMode">>
+    patch: Partial<
+      Pick<
+        Episode,
+        "title" | "idea" | "script" | "status" | "generationMode" | "targetDuration" | "splitMeta"
+      >
+    >
   ) => Promise<void>;
   reorderEpisodes: (projectId: string, orderedIds: string[]) => Promise<void>;
 }

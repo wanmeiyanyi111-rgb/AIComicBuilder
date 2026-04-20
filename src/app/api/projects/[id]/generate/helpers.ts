@@ -6,6 +6,11 @@ import {
   projects,
   storyboardVersions,
 } from "@/lib/db/schema";
+import { getScopedEpisodeCharacters } from "@/lib/episode-resources";
+import {
+  normalizeDirectorControl,
+  type DirectorControl,
+} from "@/lib/video/shot-intent";
 import { eq } from "drizzle-orm";
 
 /** Map user-facing ratio string to ImageOptions fields */
@@ -24,15 +29,125 @@ export function ratioToImageOpts(
   }
 }
 
-/**
- * Fetch project-level characters.
- *
- * Product rule: characters are shared across episodes within one project.
- * So even when epId is provided, we return the full project character set.
- */
+export function ratioToDisplayLabel(ratio?: string): string {
+  switch (ratio) {
+    case "9:16":
+      return "9:16 竖屏画幅";
+    case "1:1":
+      return "1:1 方形画幅";
+    case "2.35:1":
+      return "2.35:1 宽银幕画幅";
+    case "16:9":
+    default:
+      return "16:9 横屏画幅";
+  }
+}
+
+export function stripAspectRatioMentions(text: string): string {
+  return (text || "")
+    .replace(
+      /画幅比例[:：]?\s*(?:16:9\s*横屏|9:16\s*竖屏|2\.35:1\s*宽银幕|1:1\s*方形|16:9|9:16|2\.35:1|1:1)/giu,
+      ""
+    )
+    .replace(/\b(?:16:9|9:16|2\.35:1|1:1)\s*(?:横屏|竖屏|宽银幕|方形)?画幅/giu, "")
+    .replace(/\b(?:横屏|竖屏|横版|竖版)\s*(?:16:9|9:16|2\.35:1|1:1)?/giu, "")
+    .replace(/(^|[\s，,。；;:：\(（\[【])(?:16:9|9:16|2\.35:1|1:1)(?=($|[\s，,。；;:：\)）\]】]))/giu, "$1")
+    .replace(/[，,。；;:\s]+$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+export function enforceFramePromptRatio(text: string, ratio?: string): string {
+  const cleaned = stripAspectRatioMentions(text);
+
+  const ratioLabel = ratioToDisplayLabel(ratio);
+  if (!cleaned) {
+    return `画幅比例严格锁定为${ratioLabel}。`;
+  }
+  return `${cleaned}。画幅比例严格锁定为${ratioLabel}。`;
+}
+
+export function enforceVideoPromptRatio(text: string, ratio?: string): string {
+  const cleaned = stripAspectRatioMentions(text);
+  const ratioLabel = ratioToDisplayLabel(ratio);
+  if (!cleaned) {
+    return `画幅比例：${ratioLabel}。`;
+  }
+  if (cleaned.startsWith(`画幅比例：${ratioLabel}`)) {
+    return cleaned;
+  }
+  return `画幅比例：${ratioLabel}。\n${cleaned}`.trim();
+}
+
+export function buildStoryboardPanelImagePrompt(params: {
+  basePrompt: string;
+  ratio?: string;
+  panelIndex?: number | null;
+  stage?: string | null;
+  beat?: string | null;
+  storyGoal?: string | null;
+  primaryScene?: string | null;
+  startingAction?: string | null;
+  endingAction?: string | null;
+  continuityBeats?: unknown;
+  mustKeep?: unknown;
+  delta?: string | null;
+}): string {
+  const basePrompt = enforceFramePromptRatio(params.basePrompt || "", params.ratio);
+  const continuityBeats = Array.isArray(params.continuityBeats)
+    ? params.continuityBeats.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const mustKeep = Array.isArray(params.mustKeep)
+    ? params.mustKeep.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+
+  const contextBlocks = [
+    "当前任务：你只生成四宫格连续剧情分镜中的单独一格画面，不是整张分镜板，不是拼贴海报，不是多镜头排版。",
+    params.panelIndex ? `当前格序号：第${params.panelIndex}格。` : "",
+    params.stage ? `当前格阶段：${params.stage}。` : "",
+    params.beat ? `当前格剧情职责：${params.beat}。` : "",
+    params.storyGoal ? `本段剧情唯一目标：${params.storyGoal}。` : "",
+    params.primaryScene ? `主场景锁定：${params.primaryScene}。` : "",
+    params.startingAction ? `起始动作：${params.startingAction}。` : "",
+    params.endingAction ? `结束动作：${params.endingAction}。` : "",
+    continuityBeats.length > 0
+      ? `中段连续变化：${continuityBeats.join("；")}。`
+      : "",
+    mustKeep.length > 0
+      ? `本格必须继承不变：${mustKeep.join("、")}。`
+      : "",
+    params.delta ? `本格相对上一格只允许的变化：${params.delta}。` : "",
+    "导演约束：这是一张服务剧情演绎的单帧电影画面，只表现当前时间切片，不得额外发散成多个同时发生的镜头。",
+    "硬性禁止：四联画、九宫格、拼贴、分屏、漫画页、故事板版式、接触表、画中画、重复人物排版、文字标题、字幕、编号、注释箭头、排版边框。",
+    "输出要求：只生成一张完整、干净、单镜头、单时间切片的电影级画面。",
+    `单格生图提示词：${basePrompt}`,
+  ].filter(Boolean);
+
+  return contextBlocks.join("\n");
+}
+
+export function enforceVisualStyleRatio(
+  visualStyle: string,
+  ratio?: string
+): string {
+  const target = ratioToDisplayLabel(ratio).replace("画幅", "");
+  const base = (visualStyle || "").trim();
+  if (!base) {
+    return `画幅比例：${target}`;
+  }
+
+  if (/画幅比例[:：]/.test(base)) {
+    return base.replace(
+      /画幅比例[:：]\s*(?:16:9\s*横屏|9:16\s*竖屏|2\.35:1\s*宽银幕|1:1\s*方形)/giu,
+      `画幅比例：${target}`
+    );
+  }
+
+  return `${base}；画幅比例：${target}`;
+}
+
 export async function getEpisodeCharacters(projectId: string, epId?: string | null) {
-  void epId;
-  return db.select().from(characters).where(eq(characters.projectId, projectId));
+  return getScopedEpisodeCharacters(projectId, epId);
 }
 
 /** Load script text from episode when epId exists, else from project. */
@@ -132,11 +247,122 @@ export async function getVersionedUploadDir(
   );
 }
 
+type ProviderErrorPayload = {
+  error?: {
+    code?: string;
+    message?: string;
+  };
+  code?: string;
+  message?: string;
+};
+
+function getRawErrorText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function tryParseProviderErrorPayload(text: string): ProviderErrorPayload | null {
+  const source = text.trim();
+  if (!source) return null;
+
+  const parse = (candidate: string): ProviderErrorPayload | null => {
+    try {
+      const parsed = JSON.parse(candidate) as ProviderErrorPayload;
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+    return null;
+  };
+
+  // Case 1: plain JSON string
+  const direct = parse(source);
+  if (direct) return direct;
+
+  // Case 2: provider prefixes JSON after status text, e.g.:
+  // "Seedance submit failed: 400 { ...json... }"
+  const firstBrace = source.indexOf("{");
+  const lastBrace = source.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const embedded = parse(source.slice(firstBrace, lastBrace + 1));
+    if (embedded) return embedded;
+  }
+
+  return null;
+}
+
+function extractProviderErrorInfo(err: unknown): {
+  code?: string;
+  message?: string;
+  raw: string;
+} {
+  const raw = getRawErrorText(err);
+  const payload = tryParseProviderErrorPayload(raw);
+  const nested = payload?.error;
+  return {
+    code: nested?.code || payload?.code,
+    message: nested?.message || payload?.message,
+    raw,
+  };
+}
+
+export function isSensitiveInputImageError(err: unknown): boolean {
+  const info = extractProviderErrorInfo(err);
+  const code = (info.code || "").toLowerCase();
+  if (code.includes("inputimagesensitivecontentdetected")) return true;
+
+  const text = `${info.message || ""} ${info.raw}`.toLowerCase();
+  return (
+    text.includes("input image may contain sensitive information") ||
+    (text.includes("sensitive") &&
+      text.includes("input image") &&
+      text.includes("request failed"))
+  );
+}
+
+export function buildSensitiveInputImageErrorMessage(err: unknown): string {
+  const info = extractProviderErrorInfo(err);
+  const detail = info.message || info.code || "InputImageSensitiveContentDetected";
+  return [
+    "视频生成被安全策略拦截：输入参考图可能包含敏感内容。",
+    "建议先重新生成该镜头的首尾帧/参考图（避免暴露、血腥、未成年人敏感、真实证件或高风险元素），再重试视频生成。",
+    `模型返回：${detail}`,
+  ].join(" ");
+}
+
+export function extractVideoErrorMessage(err: unknown): string {
+  if (isSensitiveInputImageError(err)) {
+    return buildSensitiveInputImageErrorMessage(err);
+  }
+  return extractErrorMessage(err);
+}
+
 export function extractErrorMessage(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
-  try {
-    const parsed = JSON.parse(err.message) as { error?: { message?: string } };
-    if (parsed?.error?.message) return parsed.error.message;
-  } catch {}
-  return err.message;
+  const info = extractProviderErrorInfo(err);
+  if (info.message) return info.message;
+  return info.raw;
+}
+
+type UnknownRecord = Record<string, unknown>;
+
+export function getDirectorControlFromPayload(
+  payload?: UnknownRecord
+): DirectorControl {
+  const raw = payload?.directorControl;
+  if (!raw || typeof raw !== "object") {
+    return normalizeDirectorControl();
+  }
+  const obj = raw as UnknownRecord;
+  return normalizeDirectorControl({
+    actionIntensity:
+      typeof obj.actionIntensity === "number"
+        ? obj.actionIntensity
+        : Number(obj.actionIntensity),
+    cameraMotion:
+      typeof obj.cameraMotion === "number"
+        ? obj.cameraMotion
+        : Number(obj.cameraMotion),
+    emotionIntensity:
+      typeof obj.emotionIntensity === "number"
+        ? obj.emotionIntensity
+        : Number(obj.emotionIntensity),
+  });
 }

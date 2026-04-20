@@ -3,10 +3,10 @@
 import { useTranslations } from "next-intl";
 import { useProjectStore } from "@/stores/project-store";
 import { apiFetch } from "@/lib/api-fetch";
-import { Film, ImageIcon } from "lucide-react";
+import { LayoutGrid, ImageIcon } from "lucide-react";
 import { toast } from "sonner";
 
-type GenerationMode = "keyframe" | "reference";
+type GenerationMode = "storyboard_grid" | "reference";
 
 export function GenerationModeTab() {
   const t = useTranslations("project");
@@ -14,7 +14,7 @@ export function GenerationModeTab() {
 
   if (!project) return null;
 
-  const mode = (project.generationMode || "keyframe") as GenerationMode;
+  const mode = (project.generationMode || "storyboard_grid") as GenerationMode;
 
   async function switchMode(newMode: GenerationMode) {
     if (!project || newMode === mode) return;
@@ -41,15 +41,19 @@ export function GenerationModeTab() {
   return (
     <div className="inline-flex gap-1.5 rounded-xl border border-[--border-subtle] bg-[--surface] p-1.5">
       <button
-        onClick={() => switchMode("keyframe")}
+        onClick={() => switchMode("storyboard_grid")}
         className={`flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all duration-150 ${
-          mode === "keyframe"
+          mode === "storyboard_grid"
             ? "bg-white text-primary shadow ring-1 ring-primary/20"
             : "text-[--text-muted] hover:bg-white/60 hover:text-[--text-secondary]"
         }`}
       >
-        <Film className={`h-4 w-4 ${mode === "keyframe" ? "text-primary" : ""}`} />
-        {t("generationModeKeyframe")}
+        <LayoutGrid
+          className={`h-4 w-4 ${mode === "storyboard_grid" ? "text-primary" : ""}`}
+        />
+        {t("generationModeStoryboardGrid", {
+          default: "四宫格分镜",
+        } as never)}
       </button>
       <button
         onClick={() => switchMode("reference")}

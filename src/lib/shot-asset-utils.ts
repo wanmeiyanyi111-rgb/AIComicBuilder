@@ -13,8 +13,12 @@ import { db } from "@/lib/db";
 import { shotAssets } from "@/lib/db/schema";
 import { and, eq, desc } from "drizzle-orm";
 import { id as genId } from "@/lib/id";
+import { refreshShotWorkflowState } from "@/lib/storyboard/shot-workflow";
 
 export type ShotAssetType =
+  | "storyboard_panel"
+  | "storyboard_grid"
+  | "storyboard_video"
   | "first_frame"
   | "last_frame"
   | "reference"
@@ -219,6 +223,7 @@ export async function insertAssetVersion(
   };
 
   await db.insert(shotAssets).values(newRow);
+  await refreshShotWorkflowState(input.shotId);
   return rowToAsset({ ...newRow });
 }
 
@@ -244,6 +249,14 @@ export async function patchAsset(
   if (patch.meta !== undefined)
     update.meta = patch.meta ? JSON.stringify(patch.meta) : null;
   await db.update(shotAssets).set(update).where(eq(shotAssets.id, assetId));
+  const [row] = await db
+    .select({ shotId: shotAssets.shotId })
+    .from(shotAssets)
+    .where(eq(shotAssets.id, assetId))
+    .limit(1);
+  if (row?.shotId) {
+    await refreshShotWorkflowState(row.shotId);
+  }
 }
 
 /** Restore a specific historical version: flips its is_active to 1 and deactivates the rest. */
@@ -272,6 +285,7 @@ export async function activateAssetVersion(
       })
       .where(eq(shotAssets.id, row.id));
   }
+  await refreshShotWorkflowState(shotId);
 }
 
 /** Hard-delete all assets of a given type for a shot (used when wiping a mode's data). */
@@ -282,6 +296,7 @@ export async function deleteAssetsByType(
   await db
     .delete(shotAssets)
     .where(and(eq(shotAssets.shotId, shotId), eq(shotAssets.type, type)));
+  await refreshShotWorkflowState(shotId);
 }
 
 /**
@@ -294,6 +309,9 @@ export async function deleteAssetsByType(
  * Single query loads all active assets for the shot.
  */
 export interface ShotLegacyView {
+  storyboardPanels: ShotAssetRow[];
+  storyboardGrid: ShotAssetRow | null;
+  storyboardVideo: ShotAssetRow | null;
   firstFrame: string | null;
   lastFrame: string | null;
   startFrameDesc: string | null;
@@ -315,6 +333,13 @@ export async function loadShotLegacyView(shotId: string): Promise<ShotLegacyView
     .orderBy(shotAssets.type, shotAssets.sequenceInType);
   const all = rows.map(rowToAsset);
 
+  const storyboardPanels = all
+    .filter((a) => a.type === "storyboard_panel")
+    .sort((a, b) => a.sequenceInType - b.sequenceInType);
+  const storyboardGridAsset =
+    all.find((a) => a.type === "storyboard_grid" && a.sequenceInType === 0) ?? null;
+  const storyboardVideoAsset =
+    all.find((a) => a.type === "storyboard_video" && a.sequenceInType === 0) ?? null;
   const firstFrameAsset = all.find(
     (a) => a.type === "first_frame" && a.sequenceInType === 0
   );
@@ -336,13 +361,16 @@ export async function loadShotLegacyView(shotId: string): Promise<ShotLegacyView
   const sceneRefAsset = referenceImages[0];
 
   return {
+    storyboardPanels,
+    storyboardGrid: storyboardGridAsset,
+    storyboardVideo: storyboardVideoAsset,
     firstFrame: firstFrameAsset?.fileUrl ?? null,
     lastFrame: lastFrameAsset?.fileUrl ?? null,
     startFrameDesc: firstFrameAsset?.prompt ?? null,
     endFrameDesc: lastFrameAsset?.prompt ?? null,
-    videoUrl: keyframeVideoAsset?.fileUrl ?? null,
+    videoUrl: storyboardVideoAsset?.fileUrl ?? keyframeVideoAsset?.fileUrl ?? null,
     referenceVideoUrl: referenceVideoAsset?.fileUrl ?? null,
-    sceneRefFrame: sceneRefAsset?.fileUrl ?? null,
+    sceneRefFrame: storyboardGridAsset?.fileUrl ?? sceneRefAsset?.fileUrl ?? null,
     referenceImages,
   };
 }
@@ -371,6 +399,13 @@ export async function loadShotLegacyViewsBatch(
   const result = new Map<string, ShotLegacyView>();
   for (const shotId of shotIds) {
     const all = byShot.get(shotId) ?? [];
+    const storyboardPanels = all
+      .filter((a) => a.type === "storyboard_panel")
+      .sort((a, b) => a.sequenceInType - b.sequenceInType);
+    const storyboardGridAsset =
+      all.find((a) => a.type === "storyboard_grid" && a.sequenceInType === 0) ?? null;
+    const storyboardVideoAsset =
+      all.find((a) => a.type === "storyboard_video" && a.sequenceInType === 0) ?? null;
     const firstFrameAsset = all.find(
       (a) => a.type === "first_frame" && a.sequenceInType === 0
     );
@@ -388,13 +423,16 @@ export async function loadShotLegacyViewsBatch(
       .sort((a, b) => a.sequenceInType - b.sequenceInType);
     const sceneRefAsset = referenceImages[0];
     result.set(shotId, {
+      storyboardPanels,
+      storyboardGrid: storyboardGridAsset,
+      storyboardVideo: storyboardVideoAsset,
       firstFrame: firstFrameAsset?.fileUrl ?? null,
       lastFrame: lastFrameAsset?.fileUrl ?? null,
       startFrameDesc: firstFrameAsset?.prompt ?? null,
       endFrameDesc: lastFrameAsset?.prompt ?? null,
-      videoUrl: keyframeVideoAsset?.fileUrl ?? null,
+      videoUrl: storyboardVideoAsset?.fileUrl ?? keyframeVideoAsset?.fileUrl ?? null,
       referenceVideoUrl: referenceVideoAsset?.fileUrl ?? null,
-      sceneRefFrame: sceneRefAsset?.fileUrl ?? null,
+      sceneRefFrame: storyboardGridAsset?.fileUrl ?? sceneRefAsset?.fileUrl ?? null,
       referenceImages,
     });
   }

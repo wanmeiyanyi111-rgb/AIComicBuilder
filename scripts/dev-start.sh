@@ -82,4 +82,4 @@ prepare_local_env
 RUN_PORT="$(ensure_free_port "$DEFAULT_PORT")"
 
 echo "[dev:start] 启动开发服务: http://localhost:${RUN_PORT}"
-exec pnpm exec next dev -p "$RUN_PORT"
+exec pnpm exec next dev -p "$RUN_PORT" --webpack

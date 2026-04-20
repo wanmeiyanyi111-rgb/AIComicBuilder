@@ -17,3 +17,12 @@ test("removes disallowed control characters", () => {
   assert.equal(extractJSON(raw), '{"ok":true}');
 });
 
+test("extracts json object from leading and trailing prose", () => {
+  const raw = '下面是结果：\n{"ok":true,"items":[1,2,3]}\n以上为最终答案';
+  assert.equal(extractJSON(raw), '{"ok":true,"items":[1,2,3]}');
+});
+
+test("extracts json array from wrapped prose", () => {
+  const raw = 'result:\n[{"name":"A"},{"name":"B"}]\nend';
+  assert.equal(extractJSON(raw), '[{"name":"A"},{"name":"B"}]');
+});

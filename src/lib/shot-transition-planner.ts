@@ -87,7 +87,7 @@ function chooseFancyTransition(index: number): TransitionType {
 export function planShotTransitions<T extends TransitionPlanningShot>(
   shots: T[],
   options?: PlanShotTransitionOptions
-): T[] {
+): Array<T & Pick<TransitionPlanningShot, "transitionIn" | "transitionOut">> {
   if (shots.length === 0) return [];
 
   const planned = shots.map((shot) => ({ ...shot }));

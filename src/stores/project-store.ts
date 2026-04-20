@@ -23,12 +23,17 @@ interface Dialogue {
 /**
  * One row from the unified `shot_assets` table, exposed to the frontend.
  * type discriminates the role:
- *   - 'first_frame' / 'last_frame'  → keyframe-mode image assets
+ *   - 'storyboard_panel'            → four-panel storyboard image assets
+ *   - 'storyboard_grid'             → stitched 2x2 storyboard board
+ *   - 'storyboard_video'            → four-panel video output
  *   - 'reference'                   → reference-mode image assets (multi)
- *   - 'keyframe_video'              → keyframe-mode video output
  *   - 'reference_video'             → reference-mode video output
+ *   - legacy keyframe asset types are kept for compatibility reads only
  */
 export type ShotAssetType =
+  | "storyboard_panel"
+  | "storyboard_grid"
+  | "storyboard_video"
   | "first_frame"
   | "last_frame"
   | "reference"
@@ -51,6 +56,38 @@ export interface ShotAsset {
   meta?: { sceneName?: string } | null;
 }
 
+export interface StoryboardWorkflowState {
+  mode: "storyboard_grid" | "reference" | "keyframe";
+  promptReady: boolean;
+  frameReady: boolean;
+  videoPromptReady: boolean;
+  videoReady: boolean;
+  preflightStatus: "idle" | "pass" | "fail";
+  lastPreflightScore: number | null;
+  lastPreflightSummary: string;
+  lastPreflightStage: "image_prompt" | "video_prompt" | "full" | "";
+  lastPreflightAt: string;
+  lastPreflightIssues: string[];
+  stale: boolean;
+  running: boolean;
+  updatedAt: string;
+}
+
+export interface StoryboardResolvedResourceSnapshot {
+  matchedCharacterIds: string[];
+  matchedCharacterNames: string[];
+  matchedSceneAssetIds: string[];
+  matchedPropAssetIds: string[];
+  referenceImages: Array<{
+    kind: "character" | "scene" | "prop" | "panel";
+    label: string;
+    imageUrl: string;
+  }>;
+  resourceSummary: string;
+  resourceConfidence: "none" | "low" | "medium" | "high";
+  updatedAt: string;
+}
+
 export interface Shot {
   id: string;
   sequence: number;
@@ -71,6 +108,8 @@ export interface Shot {
   qualityScore?: number;
   qualityIssues?: string[];
   isStale?: boolean;
+  workflowState?: StoryboardWorkflowState;
+  resolvedResourceSnapshot?: StoryboardResolvedResourceSnapshot;
   chainGroupId?: string | null;
   chainIndex?: number;
   chainTotal?: number;
@@ -82,6 +121,8 @@ export interface Shot {
   /** Active shot_assets rows for this shot, all types mixed. */
   assets: ShotAsset[];
 }
+
+export type GenerationMode = "storyboard_grid" | "reference" | "keyframe";
 
 // ─── Asset access helpers (use these in UI instead of legacy fields) ─────
 // All helpers are null-safe — accept any object that may or may not have an
@@ -121,6 +162,42 @@ export function getFirstFrameUrl(shot: ShotLike): string | null {
       (a) => a.type === "first_frame" && a.sequenceInType === 0
     )?.fileUrl ?? null
   );
+}
+
+/** Active storyboard panels ordered left-to-right, top-to-bottom. */
+export function getStoryboardPanels(shot: ShotLike): ShotAsset[] {
+  return activeAssets(shot)
+    .filter((a) => a.type === "storyboard_panel")
+    .sort((a, b) => a.sequenceInType - b.sequenceInType);
+}
+
+/** Stitched 2x2 storyboard grid preview URL. */
+export function getStoryboardGridUrl(shot: ShotLike): string | null {
+  return (
+    activeAssets(shot).find(
+      (a) => a.type === "storyboard_grid" && a.sequenceInType === 0
+    )?.fileUrl ?? null
+  );
+}
+
+/** Four-panel-mode video URL. */
+export function getStoryboardVideoUrl(shot: ShotLike): string | null {
+  return (
+    activeAssets(shot).find(
+      (a) => a.type === "storyboard_video" && a.sequenceInType === 0
+    )?.fileUrl ?? null
+  );
+}
+
+/** Prompt text for each storyboard panel. */
+export function getStoryboardPanelPrompts(shot: ShotLike): string[] {
+  return getStoryboardPanels(shot).map((asset) => asset.prompt || "");
+}
+
+/** Whether all four storyboard panels have files generated. */
+export function hasStoryboardGridPanels(shot: ShotLike): boolean {
+  const panels = getStoryboardPanels(shot);
+  return panels.length >= 4 && panels.slice(0, 4).every((panel) => !!panel.fileUrl);
 }
 
 /** Get the active last_frame image URL for a shot, or null. */
@@ -207,9 +284,27 @@ interface Project {
   outline?: string;
   worldSetting?: string;
   colorPalette?: string;
+  targetDuration?: number;
+  splitMeta?: {
+    storyMode?: string;
+    targetDurationSec?: number;
+    durationMinSec?: number;
+    durationMaxSec?: number;
+    estimatedDurationSec?: number;
+    hook?: string;
+    coreConflict?: string;
+    turningPoint?: string;
+    cliffhanger?: string;
+    pacingNotes?: string;
+    beats?: Array<{ name: string; durationSec: number; summary: string }>;
+    validationIssues?: string[];
+    scriptEstimatedDurationSec?: number;
+    scriptDurationStatus?: "short" | "ok" | "long";
+    scriptDurationNotes?: string[];
+  } | null;
   status: string;
   finalVideoUrl: string | null;
-  generationMode: "keyframe" | "reference";
+  generationMode: GenerationMode;
   characters: Character[];
   shots: Shot[];
   versions: StoryboardVersion[];

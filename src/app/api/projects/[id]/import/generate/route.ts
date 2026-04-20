@@ -5,20 +5,39 @@ import {
   characters,
   episodeCharacters,
   characterRelations,
-  visualAssets,
+  projects,
 } from "@/lib/db/schema";
 import { eq, max } from "drizzle-orm";
 import { id as genId } from "@/lib/id";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { addImportLog } from "@/lib/import-utils";
+import { ensureEpisodeVisualAsset, normalizeScopedResourceName } from "@/lib/episode-resources";
+import type { ProviderConfig } from "@/lib/ai/ai-sdk";
+import { hasTextModelConfig } from "@/lib/ai/config-presence";
+import {
+  buildEpisodeScriptReviewPatch,
+  generateScriptText,
+} from "../../generate/handlers/script";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 interface EpisodeData {
   title: string;
   description: string;
   keywords: string;
   idea: string;
+  storyMode?: string;
+  targetDurationSec?: number;
+  durationMinSec?: number;
+  durationMaxSec?: number;
+  estimatedDurationSec?: number;
+  hook?: string;
+  coreConflict?: string;
+  turningPoint?: string;
+  cliffhanger?: string;
+  pacingNotes?: string;
+  beats?: Array<{ name: string; durationSec: number; summary: string }>;
+  validationIssues?: string[];
   characters?: string[];
   scenes?: string[];
   props?: string[];
@@ -58,6 +77,8 @@ export async function POST(
     }>;
     sceneCandidates?: ScenePropCandidate[];
     propCandidates?: ScenePropCandidate[];
+    modelConfig?: { text?: ProviderConfig | null };
+    autoGenerateScripts?: boolean;
   };
 
   const scenePromptByName = new Map<string, string>();
@@ -141,15 +162,46 @@ export async function POST(
         keywords: ep.keywords || "",
         idea: ep.idea || "",
         colorPalette: project.colorPalette || "",
+        targetDuration: ep.targetDurationSec || 150,
+        splitMeta: JSON.stringify({
+          storyMode: ep.storyMode || "short_drama",
+          targetDurationSec: ep.targetDurationSec || 150,
+          durationMinSec: ep.durationMinSec || 120,
+          durationMaxSec: ep.durationMaxSec || 180,
+          estimatedDurationSec: ep.estimatedDurationSec || ep.targetDurationSec || 150,
+          hook: ep.hook || "",
+          coreConflict: ep.coreConflict || "",
+          turningPoint: ep.turningPoint || "",
+          cliffhanger: ep.cliffhanger || "",
+          pacingNotes: ep.pacingNotes || "",
+          beats: ep.beats || [],
+          validationIssues: ep.validationIssues || [],
+        }),
         sequence: seq++,
       })
       .returning();
     created.push(row);
   }
 
+  if (!project.targetDuration || project.targetDuration <= 0) {
+    await db
+      .update(projects)
+      .set({
+        targetDuration: 150,
+        updatedAt: new Date(),
+      })
+      .where(eq(projects.id, projectId));
+  }
+
   // 3. Create episode_characters relations and per-episode scene/prop assets
   let relationCount = 0;
   let visualAssetCount = 0;
+  let generatedScriptCount = 0;
+  const scriptDurationSummary: Record<"short" | "ok" | "long", number> = {
+    short: 0,
+    ok: 0,
+    long: 0,
+  };
   for (let i = 0; i < body.episodes.length; i++) {
     const epData = body.episodes[i];
     const episodeId = created[i]?.id;
@@ -170,61 +222,106 @@ export async function POST(
       }
     }
 
-    const normalizeName = (value: string) => value.trim();
     const seenSceneNames = new Set<string>();
     for (const sceneName of epData.scenes || []) {
-      const normalized = normalizeName(sceneName);
+      const normalized = normalizeScopedResourceName(sceneName);
       if (!normalized) continue;
       const dedupeKey = normalized.toLowerCase();
       if (seenSceneNames.has(dedupeKey)) continue;
       seenSceneNames.add(dedupeKey);
       const prompt = scenePromptByName.get(dedupeKey) || normalized;
-      await db.insert(visualAssets).values({
-        id: genId(),
+      const result = await ensureEpisodeVisualAsset({
         projectId,
         episodeId,
         type: "scene",
         name: normalized,
         prompt,
-        status: "pending",
-        errorMessage: "",
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        updatePromptIfExists: false,
       });
-      visualAssetCount++;
+      if (result.created) visualAssetCount++;
     }
 
     const seenPropNames = new Set<string>();
     for (const propName of epData.props || []) {
-      const normalized = normalizeName(propName);
+      const normalized = normalizeScopedResourceName(propName);
       if (!normalized) continue;
       const dedupeKey = normalized.toLowerCase();
       if (seenPropNames.has(dedupeKey)) continue;
       seenPropNames.add(dedupeKey);
       const prompt = propPromptByName.get(dedupeKey) || normalized;
-      await db.insert(visualAssets).values({
-        id: genId(),
+      const result = await ensureEpisodeVisualAsset({
         projectId,
         episodeId,
         type: "prop",
         name: normalized,
         prompt,
-        status: "pending",
-        errorMessage: "",
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        updatePromptIfExists: false,
       });
-      visualAssetCount++;
+      if (result.created) visualAssetCount++;
+    }
+  }
+
+  const shouldAutoGenerateScripts =
+    body.autoGenerateScripts === true && hasTextModelConfig(body.modelConfig);
+
+  if (shouldAutoGenerateScripts) {
+    for (let i = 0; i < body.episodes.length; i++) {
+      const episodeId = created[i]?.id;
+      const epData = body.episodes[i];
+      if (!episodeId || !epData?.idea?.trim()) continue;
+      await addImportLog(
+        projectId,
+        5,
+        "running",
+        `正在生成第 ${i + 1}/${body.episodes.length} 集剧本：${epData.title || `第${i + 1}集`}`
+      );
+      try {
+        const scriptText = await generateScriptText(
+          projectId,
+          project.userId,
+          epData.idea,
+          body.modelConfig,
+          episodeId
+        );
+        const { patch, durationReview } = await buildEpisodeScriptReviewPatch(
+          episodeId,
+          scriptText
+        );
+        await db
+          .update(episodes)
+          .set(patch)
+          .where(eq(episodes.id, episodeId));
+        generatedScriptCount++;
+        if (durationReview) {
+          scriptDurationSummary[durationReview.status] += 1;
+          await addImportLog(
+            projectId,
+            5,
+            "running",
+            `第 ${i + 1} 集剧本复核约 ${durationReview.estimatedDurationSec}s（${durationReview.status === "ok" ? "达标" : durationReview.status === "long" ? "偏长" : "偏短"}）`
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        await addImportLog(
+          projectId,
+          5,
+          "running",
+          `第 ${i + 1} 集剧本生成失败：${msg}`
+        );
+      }
     }
   }
 
   await addImportLog(
     projectId, 5, "done",
-    `导入完成！创建了 ${body.characters.length} 个角色和 ${created.length} 集（${relationCount} 个角色分配，${visualAssetCount} 个场景/道具资产）`,
+    `导入完成！创建了 ${body.characters.length} 个角色和 ${created.length} 集（${relationCount} 个角色分配，${visualAssetCount} 个场景/道具资产，${generatedScriptCount} 集剧本）`,
     {
       episodeCount: created.length,
       characterCount: body.characters.length,
       visualAssetCount,
+      generatedScriptCount,
+      scriptDurationSummary,
     }
   );
 
@@ -232,5 +329,7 @@ export async function POST(
     episodes: created,
     characterCount: body.characters.length,
     visualAssetCount,
+    generatedScriptCount,
+    scriptDurationSummary,
   }, { status: 201 });
 }

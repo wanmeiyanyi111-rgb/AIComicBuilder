@@ -10,6 +10,7 @@ import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { id as genId } from "@/lib/id";
 import { buildScriptSplitPrompt } from "@/lib/ai/prompts/script-split";
 import { resolvePrompt } from "@/lib/ai/prompts/resolver";
+import { chunkTextByLimit } from "@/lib/import-utils";
 
 export const maxDuration = 300;
 
@@ -52,26 +53,6 @@ async function extractText(buffer: Buffer, filename: string): Promise<string> {
 // ---------------------------------------------------------------------------
 
 const CHUNK_SIZE = 10000; // ~10000 chars per chunk
-
-/** Split text at paragraph boundaries, each chunk ≤ CHUNK_SIZE chars */
-function chunkText(text: string): string[] {
-  if (text.length <= CHUNK_SIZE) return [text];
-
-  const paragraphs = text.split(/\n{2,}/);
-  const chunks: string[] = [];
-  let current = "";
-
-  for (const para of paragraphs) {
-    if (current.length + para.length + 2 > CHUNK_SIZE && current.length > 0) {
-      chunks.push(current.trim());
-      current = "";
-    }
-    current += (current ? "\n\n" : "") + para;
-  }
-  if (current.trim()) chunks.push(current.trim());
-
-  return chunks;
-}
 
 // ---------------------------------------------------------------------------
 // Route handler
@@ -142,7 +123,7 @@ export async function POST(
   }
 
   // Chunk the text
-  const chunks = chunkText(fullText);
+  const chunks = chunkTextByLimit(fullText, CHUNK_SIZE);
   const model = createLanguageModel(modelConfig.text);
   const scriptSplitSystem = await resolvePrompt("script_split", { userId, projectId });
 

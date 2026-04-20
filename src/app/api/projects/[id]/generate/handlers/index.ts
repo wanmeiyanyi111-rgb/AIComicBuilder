@@ -8,6 +8,11 @@ export {
   handleSingleFrameGenerate,
 } from "./frame";
 export {
+  handleBatchStoryboardGenerate,
+  handleGenerateStoryboardPrompts,
+  handleSingleStoryboardGenerate,
+} from "./storyboard";
+export {
   handleBatchVideoGenerate,
   handleSingleVideoGenerate,
 } from "./video";
@@ -23,6 +28,7 @@ export {
   handleBatchVideoPrompt,
   handleSingleVideoPrompt,
 } from "./video-prompt";
+export { handleVideoPreflight } from "./video-preflight";
 export { handleGenerateKeyframePrompts } from "./keyframe-prompt";
 export { handleAiOptimizeText } from "./optimize";
 export {

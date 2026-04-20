@@ -8,6 +8,11 @@ import {
   resolveProjectStyle,
   resolveProjectStyleFromSource,
 } from "@/lib/project-style";
+import { normalizeRuntimeGenerationMode } from "@/lib/generation-mode";
+import {
+  parseStoryboardResolvedResourceSnapshot,
+  parseStoryboardWorkflowState,
+} from "@/lib/storyboard/shot-workflow";
 
 export async function GET(
   request: Request,
@@ -94,7 +99,15 @@ export async function GET(
         modelId: a.modelId,
         meta: a.meta ? JSON.parse(a.meta) : null,
       }));
-      return { ...shot, dialogues: shotDialogues, assets };
+      return {
+        ...shot,
+        workflowState: parseStoryboardWorkflowState(shot.workflowState),
+        resolvedResourceSnapshot: parseStoryboardResolvedResourceSnapshot(
+          shot.resolvedResourceSnapshot
+        ),
+        dialogues: shotDialogues,
+        assets,
+      };
     })
   );
 
@@ -113,8 +126,12 @@ export async function GET(
 
   return NextResponse.json({
     ...project,
+    generationMode: normalizeRuntimeGenerationMode(project.generationMode),
     styleId: normalizedStyle.styleId,
-    episodes: projectEpisodes,
+    episodes: projectEpisodes.map((episode) => ({
+      ...episode,
+      generationMode: normalizeRuntimeGenerationMode(episode.generationMode),
+    })),
     characters: projectCharacters,
     shots: enrichedShots,
     versions: allVersions.map((v) => ({
@@ -143,7 +160,7 @@ export async function PATCH(
     script: string;
     outline: string;
     status: "draft" | "processing" | "completed";
-    generationMode: "keyframe" | "reference";
+    generationMode: "storyboard_grid" | "keyframe" | "reference";
     useProjectPrompts: number;
     styleId: string;
     colorPalette: string;
@@ -180,7 +197,9 @@ export async function PATCH(
       ...(script !== undefined && { script }),
       ...(outline !== undefined && { outline }),
       ...(status !== undefined && { status }),
-      ...(generationMode !== undefined && { generationMode }),
+      ...(generationMode !== undefined && {
+        generationMode: normalizeRuntimeGenerationMode(generationMode),
+      }),
       ...(useProjectPrompts !== undefined && { useProjectPrompts }),
       ...(styleResolved && { styleId: styleResolved.styleId }),
       ...(styleResolved && { colorPalette: styleResolved.preset.colorPalette }),
@@ -216,6 +235,7 @@ export async function PATCH(
 
   return NextResponse.json({
     ...updated,
+    generationMode: normalizeRuntimeGenerationMode(updated.generationMode),
     styleId: normalizedStyle.styleId,
   });
 }

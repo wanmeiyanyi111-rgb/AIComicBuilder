@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { generateText } from "ai";
-import { createLanguageModel, extractJSON } from "@/lib/ai/ai-sdk";
+import { createLanguageModel } from "@/lib/ai/ai-sdk";
 import { hasTextModelConfig } from "@/lib/ai/config-presence";
 import { db } from "@/lib/db";
 import {
@@ -16,51 +15,26 @@ import { id as genId } from "@/lib/id";
 import { buildShotSplitPrompt } from "@/lib/ai/prompts/shot-split";
 import { resolveSlotContents } from "@/lib/ai/prompts/resolver";
 import { getPromptDefinition } from "@/lib/ai/prompts/registry";
-import { getModelMaxDuration } from "@/lib/ai/model-limits";
 import { getEpisodeCharacters } from "../helpers";
 import type { ModelConfig } from "../types";
 import { expandShotsForVideoControl } from "@/lib/shot-segmentation";
 import { planShotTransitions, summarizeTransitionUsage } from "@/lib/shot-transition-planner";
 import { normalizeShotTransitionProfileId } from "@/lib/shot-transition-profile";
-
-type ParsedShot = {
-  sequence: number;
-  sceneDescription: string;
-  startFrame: string;
-  endFrame: string;
-  motionScript: string;
-  videoScript?: string;
-  duration: number;
-  dialogues: Array<{ character: string; text: string }>;
-  cameraDirection?: string;
-  transitionIn?: string;
-  transitionOut?: string;
-  compositionGuide?: string;
-  focalPoint?: string;
-  depthOfField?: string;
-  soundDesign?: string;
-  musicCue?: string;
-  characters?: string[];
-  referenceImagePrompts?: string[];
-};
-
-function parseShotSplitPayload(rawText: string): ParsedShot[] {
-  const parsed = JSON.parse(extractJSON(rawText));
-  // Handle multiple formats:
-  // 1. Scene-grouped: [{ sceneTitle, shots: [...] }]
-  // 2. Flat with wrapper: { shots: [...] }
-  // 3. Flat array: [{ sequence, ... }]
-  if (Array.isArray(parsed) && parsed.length > 0 && (parsed[0] as { shots?: unknown[] }).shots) {
-    return parsed.flatMap((scene: { sceneDescription?: string; shots?: ParsedShot[] }) =>
-      (scene.shots || []).map((s) => ({
-        ...s,
-        sceneDescription: s.sceneDescription || scene.sceneDescription || "",
-      }))
-    );
-  }
-  if (Array.isArray(parsed)) return parsed as ParsedShot[];
-  return ((parsed as { shots?: ParsedShot[] }).shots || []) as ParsedShot[];
-}
+import {
+  buildShortDramaPlanContext,
+  buildShortDramaShotBudget,
+} from "@/lib/story/short-drama";
+import {
+  type ParsedShot,
+  countScriptSceneMarkers,
+  countScriptShotCues,
+  estimateMinimumDurationForChunk,
+  estimateMinimumShotsForChunk,
+  parseShotSplitPayload,
+  splitScriptByScenes,
+  validateShotCoverage,
+} from "./shot-split-utils";
+import { processShotSplitChunk } from "./shot-split-execution";
 
 export async function handleShotSplitStream(
   projectId: string,
@@ -69,12 +43,80 @@ export async function handleShotSplitStream(
   episodeId?: string
 ) {
   let script: string | null = null;
+  let splitMetaContext = "";
+  let shortDramaShotBudgetContext = "";
+  let scriptDurationContext = "";
+  let targetShotBudget:
+    | { targetShotCount: number; minShotCount: number; maxShotCount: number }
+    | null = null;
+  let reviewedScriptDurationSec = 0;
   if (episodeId) {
     const [episode] = await db.select().from(episodes).where(eq(episodes.id, episodeId));
     if (!episode) {
       return NextResponse.json({ error: "Episode not found" }, { status: 404 });
     }
     script = episode.script ?? null;
+    if (episode.splitMeta) {
+      try {
+        const splitMeta = JSON.parse(episode.splitMeta) as Record<string, unknown>;
+        splitMetaContext = buildShortDramaPlanContext(splitMeta);
+        const scriptEstimatedDurationSec =
+          typeof splitMeta.scriptEstimatedDurationSec === "number" &&
+          Number.isFinite(splitMeta.scriptEstimatedDurationSec) &&
+          splitMeta.scriptEstimatedDurationSec > 0
+            ? Math.round(splitMeta.scriptEstimatedDurationSec)
+            : 0;
+        const scriptDurationStatus =
+          splitMeta.scriptDurationStatus === "short" ||
+          splitMeta.scriptDurationStatus === "ok" ||
+          splitMeta.scriptDurationStatus === "long"
+            ? splitMeta.scriptDurationStatus
+            : null;
+        const scriptDurationNotes = Array.isArray(splitMeta.scriptDurationNotes)
+          ? splitMeta.scriptDurationNotes
+              .filter((item): item is string => typeof item === "string" && !!item.trim())
+              .slice(0, 3)
+          : [];
+        if (scriptEstimatedDurationSec > 0) {
+          reviewedScriptDurationSec = scriptEstimatedDurationSec;
+          scriptDurationContext = [
+            "【剧本时长复核】",
+            `本集真实剧本文本复核约 ${scriptEstimatedDurationSec}s，状态：${scriptDurationStatus === "long" ? "偏长" : scriptDurationStatus === "short" ? "偏短" : "达标"}。`,
+            "请优先依据这份剧本文本复核结果来拆镜头，而不是只依赖分集规划稿。",
+            scriptDurationStatus === "long"
+              ? "当前剧本偏长：请把信息密度高的动作链或情绪推进拆成更多连续小镜头，避免把多个主动作硬塞进单镜头。"
+              : scriptDurationStatus === "short"
+                ? "当前剧本偏短：请减少空转镜头，优先保留推进剧情和爆点的镜头。"
+                : "当前剧本时长基本合适：请让镜头数量与 beat 节奏稳定对应。",
+            ...scriptDurationNotes.map((note) => `- ${note}`),
+          ].join("\n");
+        }
+        const shotBudget = buildShortDramaShotBudget(splitMeta);
+        if (shotBudget) {
+          targetShotBudget = {
+            targetShotCount: shotBudget.targetShotCount,
+            minShotCount: shotBudget.minShotCount,
+            maxShotCount: shotBudget.maxShotCount,
+          };
+          shortDramaShotBudgetContext = [
+            "【短剧分镜镜头预算】",
+            `本集目标约 ${shotBudget.targetShotCount} 个镜头，允许范围 ${shotBudget.minShotCount}-${shotBudget.maxShotCount} 个镜头，平均约 ${shotBudget.averageShotDurationSec}s/镜头。`,
+            "请尽量让每个 beat 的镜头数量接近以下预算：",
+            ...shotBudget.beatBudgets.map(
+              (item) =>
+                `- ${item.beatName}：约 ${item.targetShots} 镜头，覆盖 ${item.durationSec}s，建议单镜头 ${item.suggestedShotDurationSec}s，内容：${item.summary || "按节奏完成"}`
+            ),
+            "开场 hook 必须尽快入镜，结尾 cliffhanger 必须保留独立镜头完成情绪扣子。",
+          ].join("\n");
+        }
+      } catch {
+        splitMetaContext = "";
+        shortDramaShotBudgetContext = "";
+        scriptDurationContext = "";
+        targetShotBudget = null;
+        reviewedScriptDurationSec = 0;
+      }
+    }
   } else {
     const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
     if (!project) {
@@ -149,16 +191,18 @@ export async function handleShotSplitStream(
       .where(eq(episodes.id, episodeId));
     if (epDur?.targetDuration && epDur.targetDuration > 0) targetDuration = epDur.targetDuration;
   }
+  if (reviewedScriptDurationSec > 0) {
+    targetDuration = reviewedScriptDurationSec;
+  }
 
   const model = createLanguageModel(modelConfig?.text);
-  const videoMaxDuration = getModelMaxDuration(modelConfig?.video?.modelId);
   const shotSplitSlots = await resolveSlotContents("shot_split", { userId, projectId });
   const shotSplitDef = getPromptDefinition("shot_split")!;
   const transitionProfileId = normalizeShotTransitionProfileId(
     shotSplitSlots.transition_profile_id
   );
   const systemPrompt = shotSplitDef.buildFullPrompt(shotSplitSlots, {
-    maxDuration: videoMaxDuration,
+    storyboardMaxDuration: 14,
   });
   const jsonMode = { openai: { response_format: { type: "json_object" } } };
 
@@ -166,6 +210,7 @@ export async function handleShotSplitStream(
   const scenesPerChunk = 4;
   const fullScript = script || "";
   const sceneChunks = splitScriptByScenes(fullScript, scenesPerChunk);
+  const totalSceneCount = Math.max(1, countScriptSceneMarkers(fullScript));
   // Log scene detection details
   const sceneRe = /^[\s*#]*(?:SCENE|场景)\s*\d+/i;
   const sceneMatches = fullScript.split("\n").filter((l) => sceneRe.test(l.trim()));
@@ -176,10 +221,6 @@ export async function handleShotSplitStream(
     const sceneCount = c.split("\n").filter((l) => sceneRe.test(l.trim())).length;
     console.log(`[ShotSplit] Chunk ${i + 1}: ${sceneCount} scenes, ${c.length} chars`);
   });
-
-  const maxAttempts = 2;
-  const retryInstruction =
-    "\n\nIMPORTANT: Return COMPLETE, VALID JSON only. Do not use markdown fences. Ensure all strings are closed and escaped.";
 
   // Process chunks concurrently
   const chunkResults = await Promise.all(
@@ -202,46 +243,65 @@ export async function handleShotSplitStream(
           prompt;
       }
 
+      if (splitMetaContext) {
+        prompt =
+          `${splitMetaContext}\n\n请据此控制本集镜头节奏：开场钩子镜头要快，中段冲突逐步升级，结尾必须为悬念或爆点留出镜头。\n\n` +
+          prompt;
+      }
+
+      if (scriptDurationContext) {
+        prompt = `${scriptDurationContext}\n\n${prompt}`;
+      }
+
+      if (shortDramaShotBudgetContext) {
+        prompt = `${shortDramaShotBudgetContext}\n\n${prompt}`;
+      }
+
+      const sceneCount = countScriptSceneMarkers(chunk);
+      const shotCueCount = countScriptShotCues(chunk);
+      const minimumShotsForChunk = estimateMinimumShotsForChunk(
+        chunk,
+        targetShotBudget,
+        totalSceneCount
+      );
+      const minimumDurationForChunk = estimateMinimumDurationForChunk(chunk);
+      if (sceneCount > 0 || shotCueCount > 0) {
+        prompt += [
+          "",
+          "【强制覆盖约束】",
+          sceneCount > 0
+            ? `当前剧本块包含 ${sceneCount} 个场景标记，每个场景都必须至少产出 1 个镜头，绝不能只拆第一场。`
+            : "",
+          shotCueCount > 0
+            ? `当前剧本块包含 ${shotCueCount} 个显式镜头提示（如“（特写，4s）”），你可以合并极少数相邻提示，但绝不能压缩成少量镜头草草交差。`
+            : "",
+          minimumShotsForChunk > 0
+            ? `当前剧本块最少应产出 ${minimumShotsForChunk} 个镜头，少于这个数量将视为无效输出。`
+            : "",
+          minimumDurationForChunk > 0
+            ? `当前剧本块镜头总时长至少应接近 ${minimumDurationForChunk}s，明显低于此时长将视为覆盖不足。`
+            : "",
+          "如果镜头数量明显偏少，将视为无效输出。",
+        ]
+          .filter(Boolean)
+          .join("\n");
+      }
+
       // Inject target duration
       if (targetDuration && targetDuration > 0) {
         prompt += `\n\n目标总时长：${targetDuration}秒（${Math.floor(targetDuration / 60)}分${targetDuration % 60}秒）。请确保所有镜头的时长之和接近此目标。\n`;
       }
-
-      let lastErr: unknown = null;
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          const result = await generateText({
-            model,
-            system: systemPrompt,
-            prompt: attempt === 1 ? prompt : `${prompt}${retryInstruction}`,
-            providerOptions: jsonMode,
-            temperature: attempt === 1 ? 0.7 : 0.4,
-            maxOutputTokens: 8192,
-          });
-
-          const shotList = parseShotSplitPayload(result.text);
-          if (shotList.length === 0) {
-            throw new Error("empty shot list");
-          }
-
-          console.log(
-            `[ShotSplit] Chunk ${idx + 1}/${sceneChunks.length} attempt ${attempt}: ${shotList.length} shots, keys: ${shotList[0] ? Object.keys(shotList[0]).join(",") : "empty"}`
-          );
-          return { ok: true as const, shots: shotList };
-        } catch (err) {
-          lastErr = err;
-          console.warn(
-            `[ShotSplit] Chunk ${idx + 1}/${sceneChunks.length} attempt ${attempt} failed:`,
-            err
-          );
-        }
-      }
-
-      return {
-        ok: false as const,
-        chunkIndex: idx + 1,
-        error: lastErr instanceof Error ? lastErr.message : String(lastErr),
-      };
+      return processShotSplitChunk({
+        chunk,
+        chunkIndex: idx,
+        sceneChunksLength: sceneChunks.length,
+        model,
+        prompt,
+        providerOptions: jsonMode,
+        systemPrompt,
+        targetShotBudget,
+        totalSceneCount,
+      });
     })
   );
 
@@ -276,13 +336,18 @@ export async function handleShotSplitStream(
     return NextResponse.json({ error: "Failed to generate shots" }, { status: 500 });
   }
 
-  // Normalize long shots to 3-5s segments for better generation control.
+  // Normalize long shots into dynamic 10-14s storyboard segments based on shot/story characteristics.
   const allShots = planShotTransitions(expandShotsForVideoControl(mergedShots, () => genId()), {
     profileId: transitionProfileId,
   });
   console.log(
     `[ShotSplit] Transition profile=${transitionProfileId} usage ${JSON.stringify(summarizeTransitionUsage(allShots))}`
   );
+  if (targetShotBudget) {
+    console.log(
+      `[ShotSplit] Short-drama shot budget target=${targetShotBudget.targetShotCount}, range=${targetShotBudget.minShotCount}-${targetShotBudget.maxShotCount}, actual=${allShots.length}`
+    );
+  }
 
   // Create version record
   const versionWhereClause = episodeId
@@ -364,39 +429,4 @@ export async function handleShotSplitStream(
 
   console.log(`[ShotSplit] Created ${allShots.length} shots from ${sceneChunks.length} chunks`);
   return NextResponse.json({ shots: allShots.length });
-}
-
-/** Split screenplay text into chunks by SCENE markers, ~maxScenes per chunk.
- *  Preserves the header (VISUAL STYLE + CHARACTERS) and prepends it to every chunk. */
-function splitScriptByScenes(script: string, maxScenes: number): string[] {
-  // Match SCENE markers with optional markdown bold (**), whitespace, or other decorators
-  const scenePattern = /^[\s*#]*(?:SCENE|场景)\s*\d+/i;
-  const lines = script.split("\n");
-
-  // Find scene boundary line indices
-  const boundaries: number[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (scenePattern.test(lines[i].trim())) {
-      boundaries.push(i);
-    }
-  }
-
-  // If no scene markers found or few scenes, return as single chunk
-  if (boundaries.length <= maxScenes) {
-    return [script];
-  }
-
-  // Everything before the first SCENE marker is the header (VISUAL STYLE + CHARACTERS)
-  const header = lines.slice(0, boundaries[0]).join("\n").trim();
-
-  // Group scenes into chunks, prepend header to each
-  const chunks: string[] = [];
-  for (let i = 0; i < boundaries.length; i += maxScenes) {
-    const start = boundaries[i];
-    const end = i + maxScenes < boundaries.length ? boundaries[i + maxScenes] : lines.length;
-    const scenesText = lines.slice(start, end).join("\n");
-    chunks.push(header ? `${header}\n\n${scenesText}` : scenesText);
-  }
-
-  return chunks;
 }

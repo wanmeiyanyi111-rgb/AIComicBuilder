@@ -2,6 +2,7 @@ import type { VideoProvider, VideoGenerateParams, VideoGenerateResult } from "..
 import fs from "node:fs";
 import path from "node:path";
 import { id as genId } from "@/lib/id";
+import { normalizeVideoDurationForModel } from "../model-limits";
 
 function toDataUrl(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase().replace(".", "");
@@ -106,10 +107,15 @@ export class UCloudSeedanceProvider implements VideoProvider {
     return { filePath: filepath };
   }
 
+  private mapDuration(duration?: number): number {
+    return normalizeVideoDurationForModel(this.model, duration ?? 5);
+  }
+
   private buildKeyframeBody(
     params: VideoGenerateParams & { firstFrame: string; lastFrame: string }
   ): Record<string, unknown> {
     const isSeedance2 = this.model.includes("seedance-2");
+    const duration = this.mapDuration(params.duration);
     return {
       model: this.model,
       input: {
@@ -128,7 +134,7 @@ export class UCloudSeedanceProvider implements VideoProvider {
         ],
       },
       parameters: {
-        duration: params.duration || 5,
+        duration,
         ratio: params.ratio || "16:9",
         resolution: this.resolution,
         watermark: false,
@@ -141,6 +147,7 @@ export class UCloudSeedanceProvider implements VideoProvider {
     params: VideoGenerateParams & { initialImage: string }
   ): Record<string, unknown> {
     const isSeedance2 = this.model.includes("seedance-2");
+    const duration = this.mapDuration(params.duration);
 
     const content: Record<string, unknown>[] = [
       { type: "text", text: params.prompt },
@@ -173,7 +180,7 @@ export class UCloudSeedanceProvider implements VideoProvider {
       model: this.model,
       input: { content },
       parameters: {
-        duration: params.duration || 5,
+        duration,
         ratio: params.ratio || "16:9",
         resolution: this.resolution,
         watermark: false,

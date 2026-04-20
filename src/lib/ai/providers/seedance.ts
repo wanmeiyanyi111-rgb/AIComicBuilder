@@ -6,6 +6,7 @@ import {
   CANONICAL_SEEDANCE_1_5_PRO,
   normalizeVideoModelId,
 } from "../model-aliases";
+import { normalizeVideoDurationForModel } from "../model-limits";
 
 function toDataUrl(filePath: string): string {
   const ext = path.extname(filePath).toLowerCase().replace(".", "");
@@ -112,8 +113,13 @@ export class SeedanceProvider implements VideoProvider {
     return { filePath: filepath, lastFrameUrl };
   }
 
+  private mapDuration(duration?: number): number {
+    return normalizeVideoDurationForModel(this.model, duration ?? 5);
+  }
+
   private buildKeyframeBody(params: VideoGenerateParams & { firstFrame: string; lastFrame: string }): Record<string, unknown> {
     const isSeedance2 = this.model.includes("seedance-2");
+    const duration = this.mapDuration(params.duration);
     return {
       model: this.model,
       content: [
@@ -121,7 +127,7 @@ export class SeedanceProvider implements VideoProvider {
         { type: "image_url", image_url: { url: toDataUrl(params.firstFrame) }, role: "first_frame" },
         { type: "image_url", image_url: { url: toDataUrl(params.lastFrame) }, role: "last_frame" },
       ],
-      duration: params.duration || 5,
+      duration,
       ratio: params.ratio || "16:9",
       resolution: this.resolution,
       watermark: false,
@@ -132,6 +138,7 @@ export class SeedanceProvider implements VideoProvider {
   // Reference mode: use initial image, optionally with multi-reference images (Seedance 2.0)
   private buildReferenceBody(params: VideoGenerateParams & { initialImage: string }): Record<string, unknown> {
     const isSeedance2 = this.model.includes("seedance-2");
+    const duration = this.mapDuration(params.duration);
 
     const content: Record<string, unknown>[] = [
       { type: "text", text: params.prompt },
@@ -164,7 +171,7 @@ export class SeedanceProvider implements VideoProvider {
     return {
       model: this.model,
       content,
-      duration: params.duration || 5,
+      duration,
       ratio: params.ratio || "16:9",
       resolution: this.resolution,
       return_last_frame: true,

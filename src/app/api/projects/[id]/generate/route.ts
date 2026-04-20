@@ -7,6 +7,7 @@ import {
   handleAiOptimizeText,
   handleBatchCharacterImage,
   handleBatchFrameGenerate,
+  handleBatchStoryboardGenerate,
   handleBatchRefImageGenerate,
   handleBatchReferenceVideo,
   handleBatchSceneFrame,
@@ -14,6 +15,7 @@ import {
   handleBatchVideoPrompt,
   handleCharacterExtract,
   handleGenerateKeyframePrompts,
+  handleGenerateStoryboardPrompts,
   handleGenerateRefPrompts,
   handleScriptGenerate,
   handleScriptOutlineAction,
@@ -24,10 +26,12 @@ import {
   handleSingleRefImageGenerate,
   handleSingleReferenceVideo,
   handleSingleSceneFrame,
+  handleSingleStoryboardGenerate,
   handleSingleShotRefImageGenerateAll,
   handleSingleShotRewrite,
   handleSingleVideoGenerate,
   handleSingleVideoPrompt,
+  handleVideoPreflight,
   handleVideoAssembleSync,
 } from "./handlers";
 
@@ -66,6 +70,12 @@ export async function POST(
     batch_character_image: () =>
       handleBatchCharacterImage(projectId, modelConfig, episodeId),
     shot_split: () => handleShotSplitStream(projectId, userId, modelConfig, episodeId),
+    generate_storyboard_prompts: () =>
+      handleGenerateStoryboardPrompts(projectId, userId, payload, modelConfig, episodeId),
+    batch_storyboard_generate: () =>
+      handleBatchStoryboardGenerate(projectId, userId, payload, modelConfig, episodeId),
+    single_storyboard_generate: () =>
+      handleSingleStoryboardGenerate(projectId, userId, payload, modelConfig, episodeId),
     generate_keyframe_prompts: () =>
       handleGenerateKeyframePrompts(projectId, userId, payload, modelConfig, episodeId),
     single_shot_rewrite: () =>
@@ -90,6 +100,8 @@ export async function POST(
       handleSingleVideoPrompt(projectId, userId, payload, modelConfig),
     batch_video_prompt: () =>
       handleBatchVideoPrompt(projectId, userId, payload, modelConfig, episodeId),
+    video_preflight: () =>
+      handleVideoPreflight(projectId, userId, payload, modelConfig, episodeId),
     ai_optimize_text: () => handleAiOptimizeText(payload, modelConfig),
     video_assemble: () => handleVideoAssembleSync(projectId, payload, episodeId),
     batch_ref_image_generate: () =>

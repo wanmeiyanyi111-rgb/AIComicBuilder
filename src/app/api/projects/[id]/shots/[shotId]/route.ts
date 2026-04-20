@@ -3,6 +3,11 @@ import { db } from "@/lib/db";
 import { shots } from "@/lib/db/schema";
 import { and, eq } from "drizzle-orm";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
+import {
+  parseStoryboardResolvedResourceSnapshot,
+  parseStoryboardWorkflowState,
+  refreshShotWorkflowState,
+} from "@/lib/storyboard/shot-workflow";
 
 async function assertShotInProject(shotId: string, projectId: string) {
   const [row] = await db
@@ -71,7 +76,17 @@ export async function PATCH(
 
   if (Object.keys(allowed).length === 0) {
     const [row] = await db.select().from(shots).where(eq(shots.id, shotId));
-    return NextResponse.json(row);
+    return NextResponse.json(
+      row
+        ? {
+            ...row,
+            workflowState: parseStoryboardWorkflowState(row.workflowState),
+            resolvedResourceSnapshot: parseStoryboardResolvedResourceSnapshot(
+              row.resolvedResourceSnapshot
+            ),
+          }
+        : null
+    );
   }
 
   const [updated] = await db
@@ -80,7 +95,17 @@ export async function PATCH(
     .where(eq(shots.id, shotId))
     .returning();
 
-  return NextResponse.json(updated);
+  await refreshShotWorkflowState(shotId);
+  const [normalized] = await db.select().from(shots).where(eq(shots.id, shotId));
+  const output = normalized ?? updated;
+
+  return NextResponse.json({
+    ...output,
+    workflowState: parseStoryboardWorkflowState(output.workflowState),
+    resolvedResourceSnapshot: parseStoryboardResolvedResourceSnapshot(
+      output.resolvedResourceSnapshot
+    ),
+  });
 }
 
 export async function DELETE(

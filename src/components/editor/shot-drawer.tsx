@@ -1,46 +1,45 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
+import { Button } from "@/components/ui/button";
+import { apiFetch } from "@/lib/api-fetch";
 import { uploadUrl } from "@/lib/utils/upload-url";
 import { useModelStore } from "@/stores/model-store";
-import { useModelGuard } from "@/hooks/use-model-guard";
-import { apiFetch } from "@/lib/api-fetch";
 import { toast } from "sonner";
 import {
-  X,
+  type Shot,
+  getReferenceVideoUrl,
+  getSceneRefFrameUrl,
+  getStoryboardGridUrl,
+  getStoryboardPanels,
+  getStoryboardVideoUrl,
+} from "@/stores/project-store";
+import {
   ChevronLeft,
   ChevronRight,
-  Loader2,
   ImageIcon,
-  VideoIcon,
+  Loader2,
+  PlayCircle,
   Sparkles,
-  RefreshCw,
-  Clock,
+  X,
 } from "lucide-react";
-import {
-  type Shot,
-  getFirstFrameUrl,
-  getLastFrameUrl,
-  getSceneRefFrameUrl,
-  getKeyframeVideoUrl,
-  getReferenceVideoUrl,
-  getFirstFramePrompt,
-  getLastFramePrompt,
-} from "@/stores/project-store";
 
-type DrawerShot = Shot;
+function stageTone(ready: boolean) {
+  return ready
+    ? "bg-emerald-100 text-emerald-700"
+    : "bg-slate-100 text-slate-500";
+}
 
 interface ShotDrawerProps {
-  shots: DrawerShot[];
+  shots: Shot[];
   openShotId: string | null;
   onClose: () => void;
   onShotChange: (id: string) => void;
   onUpdate: () => void;
+  onGenerateVideo?: (shot: Shot) => Promise<void>;
   projectId: string;
-  generationMode: "keyframe" | "reference";
+  generationMode: "storyboard_grid" | "reference";
   videoRatio: string;
   selectedVersionId: string | null;
   anyGenerating: boolean;
@@ -52,6 +51,7 @@ export function ShotDrawer({
   onClose,
   onShotChange,
   onUpdate,
+  onGenerateVideo,
   projectId,
   generationMode,
   videoRatio,
@@ -60,444 +60,296 @@ export function ShotDrawer({
 }: ShotDrawerProps) {
   const t = useTranslations();
   const getModelConfig = useModelStore((s) => s.getModelConfig);
-  const imageGuard = useModelGuard("image");
-  const videoGuard = useModelGuard("video");
+  const [busyAction, setBusyAction] = useState<"board" | "prompt" | "video" | null>(null);
 
-  const currentIndex = shots.findIndex((s) => s.id === openShotId);
+  const currentIndex = shots.findIndex((shot) => shot.id === openShotId);
   const shot = currentIndex >= 0 ? shots[currentIndex] : null;
+  const storyboardGridUrl = shot ? getStoryboardGridUrl(shot) : null;
+  const storyboardPanels = shot ? getStoryboardPanels(shot).slice(0, 4) : [];
+  const previewVideoUrl = shot
+    ? generationMode === "reference"
+      ? getReferenceVideoUrl(shot)
+      : getStoryboardVideoUrl(shot)
+    : null;
+  const fallbackImage = shot ? getSceneRefFrameUrl(shot) : null;
+  const panelPrompts = useMemo(
+    () => storyboardPanels.map((panel) => panel.prompt || ""),
+    [storyboardPanels]
+  );
+  const hasBoard =
+    generationMode === "reference" ? !!fallbackImage : !!storyboardGridUrl;
+  const hasPromptGroup =
+    generationMode === "reference" ? false : panelPrompts.some((prompt) => !!prompt.trim());
+  const hasVideoPrompt = !!shot?.videoPrompt?.trim();
 
-  // Local edit state
-  const [editPrompt, setEditPrompt] = useState("");
-  const [editStartFrame, setEditStartFrame] = useState("");
-  const [editEndFrame, setEditEndFrame] = useState("");
-  const [editMotionScript, setEditMotionScript] = useState("");
-  const [editVideoPrompt, setEditVideoPrompt] = useState("");
-  const [editCameraDirection, setEditCameraDirection] = useState("static");
-  const [editDuration, setEditDuration] = useState(5);
-
-  // Local generating state (independent of page-level anyGenerating)
-  const [generatingFrames, setGeneratingFrames] = useState(false);
-  const [generatingSceneFrame, setGeneratingSceneFrame] = useState(false);
-  const [generatingVideo, setGeneratingVideo] = useState(false);
-  const [generatingPrompt, setGeneratingPrompt] = useState(false);
-  const [rewritingText, setRewritingText] = useState(false);
-
-  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
-
-  // Sync local state when shot changes
-  useEffect(() => {
+  async function callGenerate(action: string, payload?: Record<string, unknown>) {
     if (!shot) return;
-    setEditPrompt(shot.prompt ?? "");
-    setEditStartFrame(getFirstFramePrompt(shot) ?? "");
-    setEditEndFrame(getLastFramePrompt(shot) ?? "");
-    setEditMotionScript(shot.motionScript ?? "");
-    setEditVideoPrompt(shot.videoPrompt ?? "");
-    setEditCameraDirection(shot.cameraDirection ?? "static");
-    setEditDuration(shot.duration ?? 5);
-    setGeneratingFrames(false);
-    setGeneratingSceneFrame(false);
-    setGeneratingVideo(false);
-    setGeneratingPrompt(false);
-    setRewritingText(false);
-  }, [shot?.id]);
+    await apiFetch(`/api/projects/${projectId}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action,
+        payload: {
+          shotId: shot.id,
+          ratio: videoRatio,
+          versionId: selectedVersionId,
+          ...payload,
+        },
+        modelConfig: getModelConfig(),
+      }),
+    });
+    await onUpdate();
+  }
 
-  // Escape key to close
-  useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  if (!shot) return null;
-
-  const hasPrev = currentIndex > 0;
-  const hasNext = currentIndex < shots.length - 1;
-
-  const firstFrameUrl = getFirstFrameUrl(shot);
-  const lastFrameUrl = getLastFrameUrl(shot);
-  const sceneRefFrameUrl = getSceneRefFrameUrl(shot);
-  const resolvedVideoUrl = generationMode === "reference" ? getReferenceVideoUrl(shot) : getKeyframeVideoUrl(shot);
-  const hasFrame = !!(sceneRefFrameUrl || firstFrameUrl || lastFrameUrl);
-  const hasFramePair = !!(firstFrameUrl && lastFrameUrl);
-  const hasVideoPrompt = !!shot.videoPrompt;
-  const hasVideo = !!resolvedVideoUrl;
-  const localGenerating = generatingFrames || generatingSceneFrame || generatingVideo || generatingPrompt || rewritingText;
-
-  async function patchShot(fields: Record<string, unknown>) {
+  async function handleGenerateBoard() {
     if (!shot) return;
+    setBusyAction("board");
     try {
-      await apiFetch(`/api/projects/${projectId}/shots/${shot.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(fields),
-      });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
+      await callGenerate(
+        generationMode === "reference"
+          ? "single_scene_frame"
+          : "single_storyboard_generate",
+        {
+          overwrite: hasBoard,
+        }
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "生成分镜图失败");
+    } finally {
+      setBusyAction(null);
     }
   }
 
-  async function handleGenerateFrames() {
-    if (!imageGuard()) return;
-    setGeneratingFrames(true);
+  async function handleGeneratePrompt() {
+    if (!shot) return;
+    setBusyAction("prompt");
     try {
-      await apiFetch(`/api/projects/${projectId}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "single_frame_generate",
-          payload: { shotId: shot!.id, ratio: videoRatio, versionId: selectedVersionId },
-          modelConfig: getModelConfig(),
-        }),
-      });
-      onUpdate();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
+      await callGenerate("single_video_prompt");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "生成视频提示词失败");
     } finally {
-      setGeneratingFrames(false);
-    }
-  }
-
-  async function handleGenerateSceneFrame() {
-    if (!imageGuard()) return;
-    setGeneratingSceneFrame(true);
-    try {
-      await apiFetch(`/api/projects/${projectId}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "single_scene_frame",
-          payload: { shotId: shot!.id, versionId: selectedVersionId },
-          modelConfig: getModelConfig(),
-        }),
-      });
-      onUpdate();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
-    } finally {
-      setGeneratingSceneFrame(false);
-    }
-  }
-
-  async function handleGenerateVideoPrompt() {
-    setGeneratingPrompt(true);
-    try {
-      await apiFetch(`/api/projects/${projectId}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "single_video_prompt",
-          payload: { shotId: shot!.id, versionId: selectedVersionId },
-          modelConfig: getModelConfig(),
-        }),
-      });
-      onUpdate();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
-    } finally {
-      setGeneratingPrompt(false);
+      setBusyAction(null);
     }
   }
 
   async function handleGenerateVideo() {
-    if (!videoGuard()) return;
-    setGeneratingVideo(true);
+    if (!shot) return;
+    setBusyAction("video");
     try {
-      await apiFetch(`/api/projects/${projectId}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: generationMode === "reference" ? "single_reference_video" : "single_video_generate",
-          payload: { shotId: shot!.id, ratio: videoRatio, versionId: selectedVersionId },
-          modelConfig: getModelConfig(),
-        }),
-      });
-      onUpdate();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
+      if (onGenerateVideo) {
+        await onGenerateVideo(shot);
+      } else {
+        await callGenerate(
+          generationMode === "reference"
+            ? "single_reference_video"
+            : "single_video_generate"
+        );
+      }
+      await onUpdate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "生成视频失败");
     } finally {
-      setGeneratingVideo(false);
+      setBusyAction(null);
     }
   }
 
-  async function handleRewriteText() {
-    setRewritingText(true);
-    try {
-      await apiFetch(`/api/projects/${projectId}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "single_shot_rewrite",
-          payload: { shotId: shot!.id },
-          modelConfig: getModelConfig(),
-        }),
-      });
-      onUpdate();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
-    } finally {
-      setRewritingText(false);
-    }
-  }
-
-  const frameAssets = generationMode === "reference"
-    ? [{ src: sceneRefFrameUrl, label: t("shot.sceneRefFrame") }]
-    : [
-        { src: firstFrameUrl, label: t("shot.firstFrame") },
-        { src: lastFrameUrl, label: t("shot.lastFrame") },
-      ];
+  if (!shot) return null;
 
   return (
-    <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-40 bg-black/20 backdrop-blur-[1px]"
-        onClick={onClose}
-      />
-
-      {/* Drawer */}
-      <div className="fixed right-0 top-0 z-50 flex h-full w-[560px] max-w-[90vw] flex-col border-l border-[--border-subtle] bg-white shadow-2xl">
-        {/* Header */}
-        <div className="flex flex-shrink-0 items-center gap-2 border-b border-[--border-subtle] px-4 py-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/8 font-mono text-sm font-bold text-primary">
-            {shot.sequence}
+    <div className="fixed inset-0 z-50 bg-black/45 backdrop-blur-sm">
+      <div className="absolute right-0 top-0 flex h-full w-full max-w-5xl flex-col border-l border-[--border-subtle] bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-[--border-subtle] px-5 py-4">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-[--text-muted]">
+              Shot #{shot.sequence}
+            </div>
+            <div className="mt-1 text-lg font-semibold text-[--text-primary]">
+              {shot.prompt || t("shot.noPrompt")}
+            </div>
           </div>
-          <p className="flex-1 truncate text-sm font-medium text-[--text-primary]">{shot.prompt}</p>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => hasPrev && onShotChange(shots[currentIndex - 1].id)}
-              disabled={!hasPrev || localGenerating}
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-[--text-muted] transition-colors hover:bg-[--surface] hover:text-[--text-primary] disabled:opacity-30"
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => currentIndex > 0 && onShotChange(shots[currentIndex - 1].id)}
+              disabled={currentIndex <= 0}
             >
               <ChevronLeft className="h-4 w-4" />
-            </button>
-            <button
-              onClick={() => hasNext && onShotChange(shots[currentIndex + 1].id)}
-              disabled={!hasNext || localGenerating}
-              className="flex h-7 w-7 items-center justify-center rounded-lg text-[--text-muted] transition-colors hover:bg-[--surface] hover:text-[--text-primary] disabled:opacity-30"
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() =>
+                currentIndex < shots.length - 1 && onShotChange(shots[currentIndex + 1].id)
+              }
+              disabled={currentIndex >= shots.length - 1}
             >
               <ChevronRight className="h-4 w-4" />
-            </button>
-            <button
-              onClick={onClose}
-              className="ml-1 flex h-7 w-7 items-center justify-center rounded-lg text-[--text-muted] transition-colors hover:bg-[--surface] hover:text-[--text-primary]"
-            >
+            </Button>
+            <Button variant="ghost" size="icon" onClick={onClose}>
               <X className="h-4 w-4" />
-            </button>
+            </Button>
           </div>
         </div>
 
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
-
-          {/* Step 1: Text */}
-          <section>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[--text-muted]">{t("shot.stepText")}</p>
-            <div className="space-y-2">
-              <Textarea
-                value={editPrompt}
-                onChange={(e) => setEditPrompt(e.target.value)}
-                onBlur={() => patchShot({ prompt: editPrompt })}
-                rows={2}
-                placeholder={t("shot.prompt")}
-              />
-              {generationMode === "reference" ? (
-                <Textarea
-                  value={editStartFrame}
-                  onChange={(e) => setEditStartFrame(e.target.value)}
-                  onBlur={() => patchShot({ startFrameDesc: editStartFrame })}
-                  rows={2}
-                  placeholder={t("shot.sceneFramePrompt") || "场景帧提示词"}
-                  className="border-violet-200 bg-violet-50/30 text-sm"
+        <div className="grid flex-1 gap-6 overflow-y-auto p-5 lg:grid-cols-[1.2fr_1fr]">
+          <div className="space-y-4">
+            <div className="overflow-hidden rounded-3xl border border-[--border-subtle] bg-[--surface]">
+              {storyboardGridUrl || fallbackImage ? (
+                <img
+                  src={uploadUrl(storyboardGridUrl || fallbackImage!)}
+                  alt={`Shot ${shot.sequence}`}
+                  className="aspect-video w-full object-cover"
                 />
               ) : (
-                <>
-                  <Textarea
-                    value={editStartFrame}
-                    onChange={(e) => setEditStartFrame(e.target.value)}
-                    onBlur={() => patchShot({ startFrameDesc: editStartFrame })}
-                    rows={2}
-                    placeholder={t("shot.startFrame")}
-                    className="border-blue-200 bg-blue-50/30 text-sm"
-                  />
-                  <Textarea
-                    value={editEndFrame}
-                    onChange={(e) => setEditEndFrame(e.target.value)}
-                    onBlur={() => patchShot({ endFrameDesc: editEndFrame })}
-                    rows={2}
-                    placeholder={t("shot.endFrame")}
-                    className="border-amber-200 bg-amber-50/30 text-sm"
-                  />
-                </>
-              )}
-              <Textarea
-                value={editMotionScript}
-                onChange={(e) => setEditMotionScript(e.target.value)}
-                onBlur={() => patchShot({ motionScript: editMotionScript })}
-                rows={2}
-                placeholder={t("shot.motionScript")}
-                className="border-emerald-200 bg-emerald-50/30 text-sm"
-              />
-              <input
-                value={editCameraDirection}
-                onChange={(e) => setEditCameraDirection(e.target.value)}
-                onBlur={() => patchShot({ cameraDirection: editCameraDirection })}
-                className="w-full rounded-xl border border-[--border-subtle] bg-white px-3 py-2 text-sm outline-none focus:border-primary/50"
-                placeholder="static / pan-left / zoom-in ..."
-              />
-              <div className="flex items-center gap-2">
-                <span className="flex items-center gap-1 text-xs text-[--text-muted]">
-                  <Clock className="h-3 w-3" />
-                  <input
-                    type="number"
-                    min={5}
-                    max={15}
-                    value={editDuration}
-                    onChange={(e) => {
-                      const v = Math.min(15, Math.max(5, Number(e.target.value)));
-                      setEditDuration(v);
-                      patchShot({ duration: v });
-                    }}
-                    className="w-9 rounded border border-[--border-subtle] bg-white px-1 py-0.5 text-center text-[11px] font-medium outline-none focus:border-primary/50"
-                  />
-                  <span className="text-[11px]">s</span>
-                </span>
-              </div>
-              {shot.dialogues.length > 0 && (
-                <div className="space-y-1 rounded-xl bg-[--surface] p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[--text-muted]">{t("shot.dialogue")}</p>
-                  {shot.dialogues.map((d) => (
-                    <p key={d.id} className="text-sm">
-                      <span className="font-semibold text-primary">{d.characterName}</span>
-                      <span className="mx-1.5 text-[--text-muted]">&mdash;</span>
-                      <span className="text-[--text-secondary]">{d.text}</span>
-                    </p>
-                  ))}
+                <div className="flex aspect-video items-center justify-center text-[--text-muted]">
+                  <ImageIcon className="mr-2 h-5 w-5" />
+                  暂无分镜图
                 </div>
               )}
-              <Button size="xs" variant="outline" onClick={handleRewriteText} disabled={rewritingText || anyGenerating}>
-                {rewritingText ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                {rewritingText ? t("common.generating") : t("shot.rewriteText")}
-              </Button>
             </div>
-          </section>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-[--text-muted]">
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium">
+                {generationMode === "reference" ? "参考图成品" : "四宫格分镜成品"}
+              </span>
+              <span className={`rounded-full px-2.5 py-1 font-medium ${stageTone(hasBoard)}`}>
+                {hasBoard ? "已生成" : "待生成"}
+              </span>
+            </div>
 
-          {/* Step 2: Frames */}
-          <section>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[--text-muted]">
-              {generationMode === "reference" ? t("shot.stepSceneFrame") : t("shot.stepFrames")}
-            </p>
-            {hasFrame && (
-              <div className="mb-2 flex gap-2">
-                {frameAssets.map((asset, i) => (
-                  <div
-                    key={i}
-                    className={`overflow-hidden rounded-lg border border-[--border-subtle] bg-[--surface] cursor-pointer hover:opacity-80 transition-opacity ${generationMode === "reference" ? "w-full" : "flex-1"}`}
-                    onClick={() => asset.src && setPreviewSrc(uploadUrl(asset.src))}
-                  >
-                    {asset.src
-                      ? <img src={uploadUrl(asset.src)} className="w-full object-contain" alt={asset.label} />
-                      : <div className="flex h-16 items-center justify-center"><ImageIcon className="h-4 w-4 text-[--text-muted]" /></div>
-                    }
-                  </div>
-                ))}
+            {previewVideoUrl && (
+              <div className="overflow-hidden rounded-3xl border border-[--border-subtle] bg-black">
+                <video
+                  src={uploadUrl(previewVideoUrl)}
+                  controls
+                  className="aspect-video w-full object-cover"
+                />
               </div>
             )}
-            <Button
-              size="xs"
-              variant={!hasFrame ? "default" : "outline"}
-              onClick={generationMode === "reference" ? handleGenerateSceneFrame : handleGenerateFrames}
-              disabled={generatingFrames || generatingSceneFrame || anyGenerating}
-            >
-              {(generatingFrames || generatingSceneFrame) ? <Loader2 className="h-3 w-3 animate-spin" /> : <ImageIcon className="h-3 w-3" />}
-              {(generatingFrames || generatingSceneFrame)
-                ? t("common.generating")
-                : hasFrame ? t("shot.regenerateFrames") : t("project.generateFrames")
-              }
-            </Button>
-          </section>
+          </div>
 
-          {/* Step 3: Video Prompt */}
-          <section>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[--text-muted]">{t("shot.stepVideoPrompt")}</p>
-            {hasVideoPrompt && (
-              <Textarea
-                value={editVideoPrompt}
-                onChange={(e) => setEditVideoPrompt(e.target.value)}
-                onBlur={() => patchShot({ videoPrompt: editVideoPrompt })}
-                className="mb-2 min-h-[5rem] resize-none font-mono text-xs leading-relaxed"
-              />
-            )}
-            <Button
-              size="xs"
-              variant={hasFrame && !hasVideoPrompt ? "default" : "outline"}
-              onClick={handleGenerateVideoPrompt}
-              disabled={generatingPrompt || !hasFrame || anyGenerating}
-            >
-              {generatingPrompt ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
-              {generatingPrompt
-                ? t("common.generating")
-                : hasVideoPrompt ? t("shot.regeneratePrompt") : t("shot.generateVideoPrompt")
-              }
-            </Button>
-          </section>
-
-          {/* Step 4: Video */}
-          <section>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[--text-muted]">{t("shot.stepVideo")}</p>
-            {hasVideo && (
-              <div
-                className="group relative mb-2 overflow-hidden rounded-xl border border-[--border-subtle] bg-black cursor-pointer"
-                style={{ aspectRatio: "16/9" }}
-                onClick={() => setPreviewSrc(uploadUrl(resolvedVideoUrl!))}
-              >
-                <video className="h-full w-full object-contain" src={uploadUrl(resolvedVideoUrl!)} />
-                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/30">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-white/90 shadow-lg">
-                    <VideoIcon className="h-4 w-4 text-[--text-primary] translate-x-0.5" />
+          <div className="space-y-4">
+            <div className="rounded-3xl border border-[--border-subtle] bg-[--surface]/50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-[--text-muted]">
+                    当前生成组
+                  </div>
+                  <div className="mt-1 text-sm text-[--text-secondary]">
+                    这个镜头的成品图、提示词和视频都归在同一组里查看
                   </div>
                 </div>
+                <div className="flex flex-wrap gap-1.5 text-[11px]">
+                  <span className={`rounded-full px-2 py-1 font-medium ${stageTone(hasBoard)}`}>
+                    图 {hasBoard ? "已就绪" : "待生成"}
+                  </span>
+                  {generationMode !== "reference" && (
+                    <span
+                      className={`rounded-full px-2 py-1 font-medium ${stageTone(hasPromptGroup)}`}
+                    >
+                      词组 {hasPromptGroup ? "已就绪" : "待生成"}
+                    </span>
+                  )}
+                  <span
+                    className={`rounded-full px-2 py-1 font-medium ${stageTone(hasVideoPrompt)}`}
+                  >
+                    视频词 {hasVideoPrompt ? "已就绪" : "待生成"}
+                  </span>
+                  <span
+                    className={`rounded-full px-2 py-1 font-medium ${stageTone(!!previewVideoUrl)}`}
+                  >
+                    视频 {previewVideoUrl ? "已就绪" : "待生成"}
+                  </span>
+                </div>
               </div>
-            )}
-            <Button
-              size="xs"
-              variant={hasVideoPrompt && !hasVideo ? "default" : "outline"}
-              onClick={handleGenerateVideo}
-              disabled={generatingVideo || (generationMode === "keyframe" && !hasFramePair) || anyGenerating}
-            >
-              {generatingVideo ? <Loader2 className="h-3 w-3 animate-spin" /> : <VideoIcon className="h-3 w-3" />}
-              {generatingVideo
-                ? t("common.generating")
-                : hasVideo ? t("shot.regenerateVideo") : t("project.generateVideo")
-              }
-            </Button>
-          </section>
 
-        </div>
-      </div>
+              <div className="mt-4 rounded-2xl bg-white/85 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-[--text-muted]">
+                  镜头信息
+                </div>
+                <div className="mt-3 space-y-2 text-sm text-[--text-secondary]">
+                  <div>时长：{shot.duration}s</div>
+                  <div>镜头运动：{shot.cameraDirection || "static"}</div>
+                  <div>状态：{shot.status}</div>
+                  {shot.motionScript && <div>动作脚本：{shot.motionScript}</div>}
+                </div>
+              </div>
 
-      {/* Preview lightbox */}
-      {previewSrc && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 backdrop-blur-sm"
-          onClick={() => setPreviewSrc(null)}
-        >
-          <div className="relative max-h-[90vh] max-w-[90vw]" onClick={(e) => e.stopPropagation()}>
-            {previewSrc.match(/\.(mp4|webm|mov)/) ? (
-              <video src={previewSrc} controls autoPlay className="max-h-[85vh] rounded-xl" />
-            ) : (
-              <img src={previewSrc} alt="Preview" className="max-h-[85vh] rounded-xl" />
-            )}
-            <button
-              onClick={() => setPreviewSrc(null)}
-              className="absolute -right-3 -top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/90 text-sm font-bold shadow-lg hover:scale-110 transition-transform"
-            >
-              &times;
-            </button>
+              {generationMode !== "reference" && (
+                <div className="mt-4 rounded-2xl bg-white/85 p-4">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-[--text-muted]">
+                      四宫格提示词组
+                    </div>
+                    <span className={`rounded-full px-2 py-1 text-[11px] font-medium ${stageTone(hasPromptGroup)}`}>
+                      {hasPromptGroup ? "已生成" : "未生成"}
+                    </span>
+                  </div>
+                  {panelPrompts.length === 0 ? (
+                    <div className="text-sm text-[--text-muted]">暂无四宫格提示词</div>
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {panelPrompts.map((prompt, index) => (
+                        <div key={`${shot.id}-drawer-panel-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                          <div className="mb-1 text-xs font-semibold text-primary">
+                            第 {index + 1} 格
+                          </div>
+                          <div className="whitespace-pre-wrap text-xs text-[--text-secondary]">
+                            {prompt || "暂无提示词"}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-4 rounded-2xl bg-white/85 p-4">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-[--text-muted]">
+                    视频提示词
+                  </div>
+                  <span className={`rounded-full px-2 py-1 text-[11px] font-medium ${stageTone(hasVideoPrompt)}`}>
+                    {hasVideoPrompt ? "已生成" : "未生成"}
+                  </span>
+                </div>
+                <div className="mt-3 whitespace-pre-wrap text-xs text-[--text-secondary]">
+                  {shot.videoPrompt || "暂无视频提示词"}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      )}
-    </>
+
+        <div className="flex flex-wrap gap-2 border-t border-[--border-subtle] px-5 py-4">
+          <Button
+            variant="outline"
+            onClick={handleGenerateBoard}
+            disabled={busyAction === "board" || anyGenerating}
+          >
+            {busyAction === "board" ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
+            {generationMode === "reference"
+              ? hasBoard
+                ? "重新生成参考图"
+                : "生成参考图"
+              : hasBoard
+                ? "重新生成四宫格"
+                : "生成四宫格"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={handleGeneratePrompt}
+            disabled={busyAction === "prompt" || anyGenerating}
+          >
+            {busyAction === "prompt" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+            生成视频提示词
+          </Button>
+          <Button onClick={handleGenerateVideo} disabled={busyAction === "video" || anyGenerating}>
+            {busyAction === "video" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}
+            生成视频
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }

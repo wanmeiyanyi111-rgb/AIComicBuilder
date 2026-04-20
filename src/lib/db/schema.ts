@@ -13,7 +13,11 @@ export const projects = sqliteTable("projects", {
     .notNull()
     .default("draft"),
   finalVideoUrl: text("final_video_url"),
-  generationMode: text('generation_mode', { enum: ['keyframe', 'reference'] }).notNull().default('keyframe'),
+  generationMode: text("generation_mode", {
+    enum: ["storyboard_grid", "reference", "keyframe"],
+  })
+    .notNull()
+    .default("storyboard_grid"),
   useProjectPrompts: integer("use_project_prompts").notNull().default(0),
   styleId: text("style_id").default(""),
   colorPalette: text("color_palette").default(""),
@@ -43,14 +47,17 @@ export const episodes = sqliteTable("episodes", {
   })
     .notNull()
     .default("draft"),
-  generationMode: text("generation_mode", { enum: ["keyframe", "reference"] })
+  generationMode: text("generation_mode", {
+    enum: ["storyboard_grid", "reference", "keyframe"],
+  })
     .notNull()
-    .default("keyframe"),
+    .default("storyboard_grid"),
   description: text("description").default(""),
   keywords: text("keywords").default(""),
   scriptHash: text("script_hash").default(""),
   colorPalette: text("color_palette").default(""),
   targetDuration: integer("target_duration").default(0),
+  splitMeta: text("split_meta").default(""),
   bgmUrl: text("bgm_url").default(""),
   finalVideoUrl: text("final_video_url"),
   createdAt: integer("created_at", { mode: "timestamp" })
@@ -129,10 +136,13 @@ export const scenes = sqliteTable("scenes", {
  * One row = one generated artifact (image prompt+file, or video file) bound
  * to a specific shot via shot_id. The `type` column discriminates which
  * generation mode it belongs to:
- *   - 'first_frame' / 'last_frame'  → keyframe mode image assets
+ *   - 'storyboard_panel'            → per-panel image asset (0..3)
+ *   - 'storyboard_grid'             → stitched 2x2 board preview image
+ *   - 'storyboard_video'            → four-panel-mode video output
  *   - 'reference'                   → reference mode image assets
- *   - 'keyframe_video'              → keyframe mode video output
  *   - 'reference_video'             → reference mode video output
+ *   - legacy 'first_frame'/'last_frame'/'keyframe_video' remain temporarily
+ *     for old projects until migration/cleanup is complete
  *
  * Versioning: regenerating the same asset inserts a new row with
  * (asset_version + 1, is_active=1) and flips the previous active row to
@@ -150,6 +160,9 @@ export const shotAssets = sqliteTable("shot_assets", {
     enum: [
       "first_frame",
       "last_frame",
+      "storyboard_panel",
+      "storyboard_grid",
+      "storyboard_video",
       "reference",
       "keyframe_video",
       "reference_video",
@@ -210,6 +223,10 @@ export const shots = sqliteTable("shots", {
   soundDesign: text("sound_design").default(""),
   musicCue: text("music_cue").default(""),
   costumeOverrides: text("costume_overrides").default(""),
+  workflowState: text("workflow_state").notNull().default("{}"),
+  resolvedResourceSnapshot: text("resolved_resource_snapshot")
+    .notNull()
+    .default("{}"),
   isStale: integer("is_stale").notNull().default(0),
   status: text("status", {
     enum: ["pending", "generating", "completed", "failed"],

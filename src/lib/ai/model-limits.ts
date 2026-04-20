@@ -8,8 +8,8 @@ export const MODEL_MAX_DURATIONS: Record<string, number> = {
   "kling-v1-5": 10,
   "kling-v2.5-turbo": 10,
   "kling-v3": 15,
-  "doubao-seedance-1-5-pro-250528": 12,
-  "doubao-seedance-1-5-pro-251215": 12,
+  "doubao-seedance-1-5-pro-250528": 10,
+  "doubao-seedance-1-5-pro-251215": 10,
   "doubao-seedance-1-0-lite-250528": 5,
   "wan2.7-t2v": 15,
   "wan2.7-r2v": 15,
@@ -25,8 +25,10 @@ const FAMILY_MAX_DURATIONS: [string, number][] = [
   ["veo", 8],
   ["kling-v3", 15],
   ["kling", 10],
+  ["seedance-2", 15],
+  ["seedance-1-5", 10],
   ["seedance-1-0", 5],
-  ["seedance", 12],
+  ["seedance", 10],
   ["wan2.7", 15],
   ["wan2.6", 15],
   ["wan", 15],
@@ -60,4 +62,48 @@ export function getModelMaxDuration(modelId?: string | null): number {
   }
 
   return DEFAULT_MAX_DURATION;
+}
+
+function toRoundedPositiveInt(value: number | null | undefined, fallback: number): number {
+  const rounded = Math.round(Number(value ?? fallback));
+  if (!Number.isFinite(rounded) || rounded <= 0) return fallback;
+  return rounded;
+}
+
+/**
+ * Normalize a requested video duration to a value that the target model accepts.
+ *
+ * Why this exists:
+ * - Some providers only accept discrete durations (e.g. Seedance 1.5: 5s/10s).
+ * - Our shot planner may produce 10-14s storyboard segments, while some providers still
+ *   need shorter discrete render durations at submit time.
+ * - If we pass unsupported values directly, provider submit fails with 400.
+ */
+export function normalizeVideoDurationForModel(
+  modelId: string | null | undefined,
+  requestedDuration: number | null | undefined
+): number {
+  const requested = toRoundedPositiveInt(requestedDuration, 5);
+  const lowerModelId = (modelId || "").toLowerCase();
+
+  // Seedance 1.0-lite effectively behaves as fixed 5s.
+  if (lowerModelId.includes("seedance-1-0")) {
+    return 5;
+  }
+
+  // Seedance 1.5/2.x: keep actual render requests inside a 4-5s window for stability,
+  // even if storyboard planning uses broader 10-14s pacing.
+  // Mapping rule: <=4 -> 4s, >4 -> 5s.
+  if (
+    lowerModelId.includes("seedance-1-5") ||
+    lowerModelId.includes("doubao-seedance-1-5") ||
+    lowerModelId.includes("seedance-2") ||
+    lowerModelId.includes("doubao-seedance-2")
+  ) {
+    return requested <= 4 ? 4 : 5;
+  }
+
+  // Fallback: clamp by known max capability.
+  const maxDuration = getModelMaxDuration(modelId);
+  return Math.min(maxDuration, Math.max(1, requested));
 }

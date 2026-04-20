@@ -1,9 +1,12 @@
-import { and, eq, isNull, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 import { db } from "@/lib/db";
 import { episodes, visualAssets } from "@/lib/db/schema";
-import { id as genId } from "@/lib/id";
+import {
+  ensureEpisodeVisualAsset,
+  normalizeScopedResourceName,
+} from "@/lib/episode-resources";
 import { isVisualAssetType } from "./helpers";
 
 export async function GET(
@@ -21,10 +24,7 @@ export async function GET(
 
   const conditions = [eq(visualAssets.projectId, projectId)];
   if (episodeId) {
-    // Episode page should also see project-level (global) scene/prop assets.
-    conditions.push(
-      or(eq(visualAssets.episodeId, episodeId), isNull(visualAssets.episodeId))!
-    );
+    conditions.push(eq(visualAssets.episodeId, episodeId));
   }
   if (type && isVisualAssetType(type)) conditions.push(eq(visualAssets.type, type));
 
@@ -39,23 +39,7 @@ export async function GET(
     return timeB - timeA;
   });
 
-  if (!episodeId) {
-    return NextResponse.json(sorted);
-  }
-
-  const episodeRows = sorted.filter((row) => row.episodeId === episodeId);
-  const episodeKeys = new Set(
-    episodeRows.map(
-      (row) => `${row.type}:${(row.name || "").trim().toLowerCase()}`
-    )
-  );
-  const globalRows = sorted.filter(
-    (row) =>
-      row.episodeId === null &&
-      !episodeKeys.has(`${row.type}:${(row.name || "").trim().toLowerCase()}`)
-  );
-
-  return NextResponse.json([...episodeRows, ...globalRows]);
+  return NextResponse.json(sorted);
 }
 
 export async function POST(
@@ -89,22 +73,19 @@ export async function POST(
     }
   }
 
-  const name = (body.name || "").trim() || (body.type === "scene" ? "新场景" : "新道具");
-  const prompt = (body.prompt || "").trim();
+  const name =
+    normalizeScopedResourceName(body.name || "") ||
+    (body.type === "scene" ? "新场景" : "新道具");
+  const prompt = normalizeScopedResourceName(body.prompt || "");
 
-  const insertRow: typeof visualAssets.$inferInsert = {
-    id: genId(),
+  const { asset, created } = await ensureEpisodeVisualAsset({
     projectId,
     episodeId,
     type: body.type,
     name,
     prompt,
-    status: "pending",
-    errorMessage: "",
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
+    updatePromptIfExists: true,
+  });
 
-  const [created] = await db.insert(visualAssets).values(insertRow).returning();
-  return NextResponse.json(created, { status: 201 });
+  return NextResponse.json(asset, { status: created ? 201 : 200 });
 }

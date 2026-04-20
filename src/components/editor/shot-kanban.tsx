@@ -6,18 +6,17 @@ import { Button } from "@/components/ui/button";
 import { uploadUrl } from "@/lib/utils/upload-url";
 import {
   type Shot,
-  getFirstFrameUrl,
-  getLastFrameUrl,
   getSceneRefFrameUrl,
-  getKeyframeVideoUrl,
   getReferenceVideoUrl,
+  getStoryboardGridUrl,
+  getStoryboardVideoUrl,
 } from "@/stores/project-store";
 
 type KanbanShot = Shot;
 
 interface ShotKanbanProps {
   shots: KanbanShot[];
-  generationMode: "keyframe" | "reference";
+  generationMode: "storyboard_grid" | "reference";
   anyGenerating: boolean;
   onOpenDrawer: (id: string) => void;
   onBatchFrames: () => void;
@@ -42,13 +41,27 @@ interface KanbanColumn {
   icon: React.ReactNode;
 }
 
-function classifyShot(shot: KanbanShot, mode: "keyframe" | "reference") {
+function classifyShot(
+  shot: KanbanShot,
+  mode: "storyboard_grid" | "reference"
+) {
+  const workflow = shot.workflowState;
+  if (workflow && workflow.mode === mode) {
+    if (!workflow.frameReady) return "frames";
+    if (!workflow.videoPromptReady) return "prompt";
+    if (!workflow.videoReady) return "video";
+    return "done";
+  }
+
   // In reference mode, only sceneRefFrame counts as "has frame"
-  const hasFrame = mode === "reference"
-    ? !!getSceneRefFrameUrl(shot)
-    : !!(getFirstFrameUrl(shot) || getLastFrameUrl(shot));
+  const hasFrame =
+    mode === "reference"
+      ? !!getSceneRefFrameUrl(shot)
+      : !!getStoryboardGridUrl(shot);
   const hasVideoPrompt = !!shot.videoPrompt;
-  const hasVideo = !!(mode === "reference" ? getReferenceVideoUrl(shot) : getKeyframeVideoUrl(shot));
+  const hasVideo = !!(
+    mode === "reference" ? getReferenceVideoUrl(shot) : getStoryboardVideoUrl(shot)
+  );
   if (!hasFrame) return "frames";
   if (!hasVideoPrompt) return "prompt";
   if (!hasVideo) return "video";
@@ -79,9 +92,12 @@ export function ShotKanban({
   const videoShots = shots.filter((s) => classifyShot(s, generationMode) === "video");
   const doneShots = shots.filter((s) => classifyShot(s, generationMode) === "done");
 
-  const framesGenerating = generationMode === "reference" ? generatingSceneFrames : generatingFrames;
-  const framesAction = generationMode === "reference" ? onBatchSceneFrames : onBatchFrames;
-  const videosAction = generationMode === "reference" ? onBatchReferenceVideos : onBatchVideos;
+  const framesGenerating =
+    generationMode === "reference" ? generatingSceneFrames : generatingFrames;
+  const framesAction =
+    generationMode === "reference" ? onBatchSceneFrames : onBatchFrames;
+  const videosAction =
+    generationMode === "reference" ? onBatchReferenceVideos : onBatchVideos;
 
   const columns: KanbanColumn[] = [
     {
@@ -169,12 +185,13 @@ export function ShotKanban({
               </div>
             ) : (
               col.shots.map((shot) => {
-                const thumb = getFirstFrameUrl(shot) || getSceneRefFrameUrl(shot) || getLastFrameUrl(shot);
+                const thumb = getStoryboardGridUrl(shot) || getSceneRefFrameUrl(shot);
                 const chainIndex = shot.chainIndex ?? 1;
                 const chainTotal = shot.chainTotal ?? 1;
                 const isSegmentedChain = chainTotal > 1;
                 const hasTailFrameContinuity =
                   isSegmentedChain && shot.inheritPrevLastFrame === 1 && !!shot.prevShotId;
+                const workflow = shot.workflowState;
                 return (
                   <div
                     key={shot.id}
@@ -198,6 +215,13 @@ export function ShotKanban({
                     <div className="min-w-0 flex-1">
                       <div className="text-[10px] font-mono font-bold text-primary">#{shot.sequence}</div>
                       <div className="truncate text-[11px] text-[--text-secondary]">{shot.prompt}</div>
+                      {workflow?.stale && (
+                        <div className="mt-1">
+                          <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                            需刷新
+                          </span>
+                        </div>
+                      )}
                       {isSegmentedChain && (
                         <div className="mt-1 flex flex-wrap items-center gap-1">
                           <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700">

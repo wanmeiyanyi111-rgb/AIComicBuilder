@@ -5,6 +5,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { assembleVideo } from "@/lib/video/ffmpeg";
 import { loadShotLegacyViewsBatch } from "@/lib/shot-asset-utils";
 import { extractErrorMessage } from "../helpers";
+import { normalizeRuntimeGenerationMode } from "@/lib/generation-mode";
 
 type TransitionType =
   | "cut"
@@ -20,19 +21,19 @@ export async function handleVideoAssembleSync(
   payload?: Record<string, unknown>,
   episodeId?: string
 ) {
-  let generationModeValue: string = "keyframe";
+  let generationModeValue: string = "storyboard_grid";
   if (episodeId) {
     const [episode] = await db
       .select({ generationMode: episodes.generationMode })
       .from(episodes)
       .where(eq(episodes.id, episodeId));
-    generationModeValue = episode?.generationMode ?? "keyframe";
+    generationModeValue = normalizeRuntimeGenerationMode(episode?.generationMode);
   } else {
     const [project] = await db
       .select({ generationMode: projects.generationMode })
       .from(projects)
       .where(eq(projects.id, projectId));
-    generationModeValue = project?.generationMode ?? "keyframe";
+    generationModeValue = normalizeRuntimeGenerationMode(project?.generationMode);
   }
 
   let versionId = payload?.versionId as string | undefined;

@@ -6,7 +6,13 @@ import type { ModelConfigPayload } from "@/lib/ai/provider-factory";
 import { checkVideoQuality } from "./video-quality-check";
 import { buildVideoPrompt } from "@/lib/ai/prompts/video-generate";
 import { resolveSlotContents } from "@/lib/ai/prompts/resolver";
-import { getModelMaxDuration } from "@/lib/ai/model-limits";
+import { normalizeVideoDurationForModel } from "@/lib/ai/model-limits";
+import {
+  appendIntentToVideoPrompt,
+  buildShotIntentCard,
+  evaluateVideoContinuityPreflight,
+  normalizeDirectorControl,
+} from "@/lib/video/shot-intent";
 import { eq } from "drizzle-orm";
 import type { Task } from "@/lib/task-queue";
 import { getActiveAsset, insertAssetVersion } from "@/lib/shot-asset-utils";
@@ -22,7 +28,19 @@ async function getVersionedUploadDirFromPipeline(versionId: string | null | unde
 }
 
 export async function handleVideoGenerate(task: Task) {
-  const payload = task.payload as { shotId: string; projectId?: string; userId?: string; ratio?: string; modelConfig?: ModelConfigPayload };
+  const payload = task.payload as {
+    shotId: string;
+    projectId?: string;
+    userId?: string;
+    ratio?: string;
+    modelConfig?: ModelConfigPayload;
+    directorControl?: {
+      actionIntensity?: number;
+      cameraMotion?: number;
+      emotionIntensity?: number;
+    };
+  };
+  const directorControl = normalizeDirectorControl(payload.directorControl);
 
   const [shot] = await db
     .select()
@@ -51,8 +69,10 @@ export async function handleVideoGenerate(task: Task) {
   const videoProvider = resolveVideoProvider(payload.modelConfig, versionedUploadDir);
 
   const videoModelId = payload.modelConfig?.video?.modelId;
-  const modelMaxDuration = getModelMaxDuration(videoModelId);
-  const effectiveDuration = Math.min(shot.duration ?? 10, modelMaxDuration);
+  const effectiveDuration = normalizeVideoDurationForModel(
+    videoModelId,
+    shot.duration ?? 10
+  );
 
   const userId = payload.userId ?? "";
   const projectId = payload.projectId ?? shot.projectId;
@@ -73,11 +93,39 @@ export async function handleVideoGenerate(task: Task) {
     characters: projectCharacters,
     slotContents: videoSlots,
   });
+  const intentCard = buildShotIntentCard({
+    shotId: payload.shotId,
+    sequence: shot.sequence,
+    duration: effectiveDuration,
+    mode: "keyframe",
+    prompt: shot.prompt,
+    motionScript: shot.motionScript,
+    videoScript: shot.videoScript,
+    cameraDirection: shot.cameraDirection,
+    startFrameDesc: firstFrameAsset?.prompt ?? null,
+    endFrameDesc: lastFrameAsset?.prompt ?? null,
+    chainIndex: shot.chainIndex,
+    chainTotal: shot.chainTotal,
+    inheritPrevLastFrame: shot.inheritPrevLastFrame,
+    characterNames: projectCharacters.map((c) => c.name),
+    characterHints: projectCharacters.map((c) => ({
+      name: c.name,
+      visualHint: c.visualHint,
+    })),
+    directorControl,
+  });
+  const preflight = evaluateVideoContinuityPreflight(intentCard);
+  if (!preflight.pass) {
+    throw new Error(
+      `[VideoPreflight] ${preflight.summary} 问题：${preflight.issues.join("；")}。建议：${preflight.suggestions.join("；")}`
+    );
+  }
+  const effectivePrompt = appendIntentToVideoPrompt(prompt, intentCard);
 
   const result = await videoProvider.generateVideo({
     firstFrame: firstFrameUrl,
     lastFrame: lastFrameUrl,
-    prompt,
+    prompt: effectivePrompt,
     duration: effectiveDuration,
     ratio: payload.ratio ?? "16:9",
   });
@@ -87,7 +135,7 @@ export async function handleVideoGenerate(task: Task) {
     shotId: payload.shotId,
     type: "keyframe_video",
     sequenceInType: 0,
-    prompt,
+    prompt: effectivePrompt,
     fileUrl: result.filePath,
     status: "completed",
   });

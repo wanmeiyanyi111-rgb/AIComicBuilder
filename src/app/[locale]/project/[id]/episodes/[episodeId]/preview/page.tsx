@@ -4,10 +4,10 @@ import { useState, useEffect, useRef } from "react";
 import { useSearchParams, useParams } from "next/navigation";
 import {
   useProjectStore,
-  getKeyframeVideoUrl,
   getReferenceVideoUrl,
   getSceneRefFrameUrl,
-  getFirstFrameUrl,
+  getStoryboardGridUrl,
+  getStoryboardVideoUrl,
 } from "@/stores/project-store";
 import { Button } from "@/components/ui/button";
 import { useTranslations } from "next-intl";
@@ -45,18 +45,22 @@ export default function EpisodePreviewPage() {
   const checkedUrl = useRef<string | null>(null);
 
   const finalVideoUrl = project?.finalVideoUrl ?? null;
-  const generationMode = project?.generationMode ?? "keyframe";
+  const generationMode = project?.generationMode ?? "storyboard_grid";
 
   // Which mode's videos to preview — default to the project's generationMode
-  const hasKeyframeVideos = project?.shots.some((s) => getKeyframeVideoUrl(s)) ?? false;
+  const hasStoryboardVideos = project?.shots.some((s) => getStoryboardVideoUrl(s)) ?? false;
   const hasReferenceVideos = project?.shots.some((s) => getReferenceVideoUrl(s)) ?? false;
-  const hasBothModes = hasKeyframeVideos && hasReferenceVideos;
+  const hasBothModes = hasStoryboardVideos && hasReferenceVideos;
 
-  const [previewMode, setPreviewMode] = useState<"keyframe" | "reference">(generationMode);
+  const [previewMode, setPreviewMode] = useState<"storyboard_grid" | "reference">(
+    generationMode === "reference" ? "reference" : "storyboard_grid"
+  );
 
   // Sync previewMode when project loads
   useEffect(() => {
-    if (project) setPreviewMode(project.generationMode ?? "keyframe");
+    if (project) {
+      setPreviewMode(project.generationMode === "reference" ? "reference" : "storyboard_grid");
+    }
   }, [project?.generationMode]);
 
   // Check if final video file actually exists
@@ -72,10 +76,10 @@ export default function EpisodePreviewPage() {
   if (!project) return null;
 
   const getVideoUrl = (shot: typeof project.shots[0]) =>
-    previewMode === "reference" ? getReferenceVideoUrl(shot) : getKeyframeVideoUrl(shot);
+    previewMode === "reference" ? getReferenceVideoUrl(shot) : getStoryboardVideoUrl(shot);
 
   const getThumbnail = (shot: typeof project.shots[0]) =>
-    previewMode === "reference" ? getSceneRefFrameUrl(shot) : getFirstFrameUrl(shot);
+    previewMode === "reference" ? getSceneRefFrameUrl(shot) : getStoryboardGridUrl(shot);
 
   const shotsWithVideo = project.shots.filter((s) => getVideoUrl(s));
   const allShotsHaveVideo = project.shots.length > 0 && project.shots.every((s) => getVideoUrl(s));
@@ -126,7 +130,7 @@ export default function EpisodePreviewPage() {
     a.click();
   }
 
-  function handleModeSwitch(mode: "keyframe" | "reference") {
+  function handleModeSwitch(mode: "storyboard_grid" | "reference") {
     setPreviewMode(mode);
     setSelectedShot(0);
   }
@@ -177,15 +181,15 @@ export default function EpisodePreviewPage() {
       {hasBothModes && (
         <div className="flex items-center gap-1 rounded-xl border border-[--border-subtle] bg-[--surface] p-1 w-fit">
           <button
-            onClick={() => handleModeSwitch("keyframe")}
+            onClick={() => handleModeSwitch("storyboard_grid")}
             className={cn(
               "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all duration-150",
-              previewMode === "keyframe"
+              previewMode === "storyboard_grid"
                 ? "bg-white text-primary shadow ring-1 ring-primary/20"
                 : "text-[--text-muted] hover:bg-white/60 hover:text-[--text-secondary]"
             )}
           >
-            {t("project.generationModeKeyframe")}
+            {t("project.generationModeStoryboardGrid")}
           </button>
           <button
             onClick={() => handleModeSwitch("reference")}

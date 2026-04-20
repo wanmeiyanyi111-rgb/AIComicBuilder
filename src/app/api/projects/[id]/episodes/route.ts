@@ -11,6 +11,15 @@ import { eq, asc, max, and, inArray } from "drizzle-orm";
 import { id as genId } from "@/lib/id";
 import { assertProjectOwnership } from "@/lib/assert-project-ownership";
 
+function parseSplitMeta(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -93,6 +102,7 @@ export async function GET(
       if (ep.finalVideoUrl) {
         return {
           ...ep,
+          splitMeta: parseSplitMeta(ep.splitMeta),
           previewImages: [],
           characters: linkedCharacters,
           scenes: linkedScenes,
@@ -124,6 +134,7 @@ export async function GET(
       if (frameSet.size > 0) {
         return {
           ...ep,
+          splitMeta: parseSplitMeta(ep.splitMeta),
           previewImages: [...frameSet],
           characters: linkedCharacters,
           scenes: linkedScenes,
@@ -133,15 +144,20 @@ export async function GET(
 
       // 2) Fall back to project-wide character reference images
       const charImages = await db
-        .select({ referenceImage: characters.referenceImage })
+        .select({
+          name: characters.name,
+          referenceImage: characters.referenceImage,
+        })
         .from(characters)
         .where(eq(characters.projectId, id));
       const charUrls = charImages
+        .filter((c) => linkedCharacters.includes(c.name))
         .map((c) => c.referenceImage)
         .filter((url): url is string => !!url);
 
       return {
         ...ep,
+        splitMeta: parseSplitMeta(ep.splitMeta),
         previewImages: charUrls,
         characters: linkedCharacters,
         scenes: linkedScenes,
