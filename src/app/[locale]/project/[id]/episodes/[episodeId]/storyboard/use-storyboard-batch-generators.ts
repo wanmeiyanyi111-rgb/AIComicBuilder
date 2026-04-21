@@ -50,6 +50,17 @@ type Params = {
   videoRatio: string;
 };
 
+function normalizeTargetShotIds(targetShotIds?: string | string[] | null): string[] {
+  if (Array.isArray(targetShotIds)) {
+    return targetShotIds.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  if (typeof targetShotIds === "string") {
+    const normalized = targetShotIds.trim();
+    return normalized ? [normalized] : [];
+  }
+  return [];
+}
+
 export function useStoryboardBatchGenerators({
   directorControl,
   ensureStoryboardPromptTargetsPassedPrecheck,
@@ -78,15 +89,21 @@ export function useStoryboardBatchGenerators({
   videoGuard,
   videoRatio,
 }: Params) {
-  async function handleBatchGenerateFrames(overwrite = false) {
+  async function handleBatchGenerateFrames(
+    overwrite = false,
+    targetShotIds?: string | string[] | null
+  ) {
     if (!project) return;
     if (!imageGuard()) return;
     setGeneratingFramesOverwrite(overwrite);
     setGeneratingFrames(true);
     setLastBatchAction("batch_storyboard_generate");
 
-    const targets = project.shots.filter((shot) =>
-      overwrite ? true : !hasStoryboardFrameForShot(shot)
+    const targetIdSet = new Set(normalizeTargetShotIds(targetShotIds));
+    const targets = project.shots.filter(
+      (shot) =>
+        (targetIdSet.size === 0 || targetIdSet.has(shot.id)) &&
+        (overwrite ? true : !hasStoryboardFrameForShot(shot))
     );
     if (targets.length === 0) {
       toast.info("暂无可生成四宫格分镜图的镜头");
@@ -141,7 +158,9 @@ export function useStoryboardBatchGenerators({
       });
       const data = (await response.json()) as {
         results?: Array<{ shotId?: string; status: string }>;
-        failed?: Array<{ shotId?: string }>;
+        failed?: Array<{ shotId?: string; error?: string }>;
+        aborted?: boolean;
+        abortReason?: string;
       };
       const failedIds = [
         ...(data.results || [])
@@ -155,7 +174,12 @@ export function useStoryboardBatchGenerators({
 
       if (failedIds.length > 0) {
         setLastFailedShots(failedIds);
-        toast.error(`${failedIds.length}/${totalProcessed} shots failed`);
+        const detail = data.abortReason || data.failed?.find((item) => item.error)?.error || null;
+        toast.error(
+          detail
+            ? `${failedIds.length}/${totalProcessed} shots failed: ${detail}`
+            : `${failedIds.length}/${totalProcessed} shots failed`
+        );
       } else {
         setLastFailedShots([]);
         toast.success(`All ${totalProcessed} shots completed`);

@@ -6,11 +6,13 @@ import { Film } from "lucide-react";
 import { useEpisodeStore } from "@/stores/episode-store";
 import { useModelStore } from "@/stores/model-store";
 import {
+  getStoryboardImageAudit,
   getReferenceAssets,
   getReferenceVideoUrl,
   getSceneRefFrameUrl,
   getStoryboardGridUrl,
   getStoryboardPanelPrompts,
+  getStoryboardPromptAudit,
   getStoryboardVideoUrl,
   useProjectStore,
 } from "@/stores/project-store";
@@ -42,6 +44,7 @@ export default function EpisodeStoryboardPage() {
   const [versionDropdownOpen, setVersionDropdownOpen] = useState(false);
   const versionDropdownRef = useRef<HTMLDivElement>(null);
   const [compareMode, setCompareMode] = useState(false);
+  const [showContinuityOnly, setShowContinuityOnly] = useState(false);
   const [directorControl, setDirectorControl] = useState<DirectorControl>(
     DEFAULT_DIRECTOR_CONTROL
   );
@@ -97,12 +100,23 @@ export default function EpisodeStoryboardPage() {
 
   const shots = useMemo(() => project?.shots ?? [], [project?.shots]);
   const projectCharacters = useMemo(() => project?.characters ?? [], [project?.characters]);
+  const generationMode = (project?.generationMode || "storyboard_grid") as
+    | "storyboard_grid"
+    | "reference";
+
+  const filteredShots = useMemo(() => {
+    if (!showContinuityOnly || generationMode !== "storyboard_grid") return shots;
+    return shots.filter((shot) => {
+      const audit = getStoryboardPromptAudit(shot);
+      return audit.pass === false || audit.issues.length > 0;
+    });
+  }, [generationMode, shots, showContinuityOnly]);
 
   const sceneGroups = useMemo(() => {
     const groupMap = new Map<string, { sceneId: string; shots: typeof shots }>();
     const ungrouped: typeof shots = [];
 
-    for (const shot of shots) {
+    for (const shot of filteredShots) {
       if (shot.sceneId) {
         const existing = groupMap.get(shot.sceneId);
         if (existing) existing.shots.push(shot);
@@ -113,11 +127,8 @@ export default function EpisodeStoryboardPage() {
     }
 
     return { groups: Array.from(groupMap.values()), ungrouped };
-  }, [shots]);
+  }, [filteredShots]);
 
-  const generationMode = (project?.generationMode || "storyboard_grid") as
-    | "storyboard_grid"
-    | "reference";
   const getShotWorkflow = (shot: Shot) =>
     shot.workflowState?.mode === generationMode ? shot.workflowState : null;
   const hasReferenceFrameForShot = (shot: Shot) =>
@@ -156,19 +167,40 @@ export default function EpisodeStoryboardPage() {
     let stale = 0;
     let preflightPassed = 0;
     let preflightFailed = 0;
+    let continuityPassed = 0;
+    let continuityFailed = 0;
+    let imageAuditPassed = 0;
+    let imageAuditFailed = 0;
 
     for (const shot of shots) {
       const workflow = getShotWorkflow(shot);
-      if (generationMode === "reference" ? hasReferenceFrameForShot(shot) : hasStoryboardFrameForShot(shot)) {
+      const continuityAudit =
+        generationMode === "storyboard_grid" ? getStoryboardPromptAudit(shot) : null;
+      const imageAudit =
+        generationMode === "storyboard_grid" ? getStoryboardImageAudit(shot) : null;
+      if (
+        generationMode === "reference"
+          ? hasReferenceFrameForShot(shot)
+          : hasStoryboardFrameForShot(shot)
+      ) {
         framesReady += 1;
       }
       if (hasVideoPromptForShot(shot)) videoPromptsReady += 1;
-      if (generationMode === "reference" ? hasReferenceVideoForShot(shot) : hasStoryboardVideoForShot(shot)) {
+      if (
+        generationMode === "reference"
+          ? hasReferenceVideoForShot(shot)
+          : hasStoryboardVideoForShot(shot)
+      ) {
         videosReady += 1;
       }
       if (isShotWorkflowStale(shot)) stale += 1;
       if (workflow?.preflightStatus === "pass") preflightPassed += 1;
       if (workflow?.preflightStatus === "fail") preflightFailed += 1;
+      if (continuityAudit?.pass === true) continuityPassed += 1;
+      if (continuityAudit?.pass === false || continuityAudit?.issues.length)
+        continuityFailed += 1;
+      if (imageAudit?.pass === true) imageAuditPassed += 1;
+      if (imageAudit?.pass === false) imageAuditFailed += 1;
     }
 
     return {
@@ -178,11 +210,19 @@ export default function EpisodeStoryboardPage() {
       stale,
       preflightPassed,
       preflightFailed,
+      continuityPassed,
+      continuityFailed,
+      imageAuditPassed,
+      imageAuditFailed,
       needsFrames: Math.max(0, shots.length - framesReady),
       needsVideoPrompts: Math.max(0, shots.length - videoPromptsReady),
       needsVideos: Math.max(0, shots.length - videosReady),
     };
   }, [generationMode, shots]);
+
+  const hasContinuityRepairTargets = workflowSummary.continuityFailed > 0;
+  const hasImageAuditRepairTargets =
+    workflowSummary.continuityFailed > 0 || workflowSummary.imageAuditFailed > 0;
 
   const getBatchFailureDetail = (
     results: Array<{ status: string; error?: string }>
@@ -269,6 +309,8 @@ export default function EpisodeStoryboardPage() {
     generatingRefPrompts,
     generatingSceneFrames,
     generatingStoryboardPrompts,
+    handleRepairContinuityImages,
+    handleRepairContinuityPrompts,
     generatingVideoPrompts,
     generatingVideos,
     generatingVideosOverwrite,
@@ -334,7 +376,7 @@ export default function EpisodeStoryboardPage() {
     void fetchProject(project.id, undefined, versionId);
   }
 
-  const drawerShots = shots;
+  const drawerShots = filteredShots.length > 0 ? filteredShots : shots;
 
   if (!project) return null;
 
@@ -354,6 +396,8 @@ export default function EpisodeStoryboardPage() {
         generatingRefPrompts={generatingRefPrompts}
         generatingSceneFrames={generatingSceneFrames}
         generatingStoryboardPrompts={generatingStoryboardPrompts}
+        hasContinuityRepairTargets={hasContinuityRepairTargets}
+        hasImageAuditRepairTargets={hasImageAuditRepairTargets}
         generatingVideoPrompts={generatingVideoPrompts}
         generatingVideos={generatingVideos}
         generatingVideosOverwrite={generatingVideosOverwrite}
@@ -366,6 +410,8 @@ export default function EpisodeStoryboardPage() {
         handleBatchGenerateVideoPrompts={handleBatchGenerateVideoPrompts}
         handleBatchGenerateVideos={handleBatchGenerateVideos}
         handleGenerateRefPrompts={handleGenerateRefPrompts}
+        handleRepairContinuityImages={handleRepairContinuityImages}
+        handleRepairContinuityPrompts={handleRepairContinuityPrompts}
         handleGenerateShots={handleGenerateShots}
         handleGenerateStoryboardPrompts={handleGenerateStoryboardPrompts}
         handlePreviewReplanLongShots={handlePreviewReplanLongShots}
@@ -379,6 +425,9 @@ export default function EpisodeStoryboardPage() {
         onRefreshStoryboardView={refreshCurrentStoryboardView}
         onSelectVersion={handleSelectVersion}
         onSetCompareMode={setCompareMode}
+        onToggleContinuityOnly={() =>
+          setShowContinuityOnly((value) => !value)
+        }
         onToggleVersionDropdown={setVersionDropdownOpen}
         onUpdateDirectorControl={updateDirectorControl}
         preflightDisplayItems={preflightDisplayItems}
@@ -407,6 +456,7 @@ export default function EpisodeStoryboardPage() {
         videoRatio={videoRatio}
         setVideoRatio={setVideoRatio}
         workflowSummary={workflowSummary}
+        showContinuityOnly={showContinuityOnly}
       />
 
       {compareMode ? (
@@ -439,7 +489,7 @@ export default function EpisodeStoryboardPage() {
         </div>
       ) : viewMode === "kanban" ? (
         <ShotKanban
-          shots={project.shots}
+          shots={filteredShots}
           generationMode={generationMode}
           anyGenerating={anyGenerating}
           onOpenDrawer={(id) => setOpenDrawerShotId(id)}
@@ -453,6 +503,15 @@ export default function EpisodeStoryboardPage() {
           generatingVideoPrompts={generatingVideoPrompts}
           generatingVideos={generatingVideos}
         />
+      ) : filteredShots.length === 0 ? (
+        <div className="rounded-3xl border border-dashed border-[--border-subtle] bg-[--surface]/50 px-6 py-16 text-center">
+          <div className="text-sm font-medium text-[--text-primary]">
+            当前没有需要修复连续性的镜头
+          </div>
+          <div className="mt-2 text-xs text-[--text-muted]">
+            关闭“只看待修复连续性镜头”后即可查看全部镜头。
+          </div>
+        </div>
       ) : (
         (() => {
           const renderShotCard = (shot: Shot) => {

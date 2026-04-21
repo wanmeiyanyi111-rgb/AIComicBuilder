@@ -24,6 +24,8 @@ export function StoryboardControlPanel({
   generatingRefPrompts,
   generatingSceneFrames,
   generatingStoryboardPrompts,
+  hasContinuityRepairTargets,
+  hasImageAuditRepairTargets,
   generatingVideoPrompts,
   generatingVideos,
   generatingVideosOverwrite,
@@ -36,6 +38,8 @@ export function StoryboardControlPanel({
   handleBatchGenerateVideoPrompts,
   handleBatchGenerateVideos,
   handleGenerateRefPrompts,
+  handleRepairContinuityImages,
+  handleRepairContinuityPrompts,
   handleGenerateShots,
   handleGenerateStoryboardPrompts,
   handlePreviewReplanLongShots,
@@ -49,6 +53,7 @@ export function StoryboardControlPanel({
   onRefreshStoryboardView,
   onSelectVersion,
   onSetCompareMode,
+  onToggleContinuityOnly,
   onToggleVersionDropdown,
   onUpdateDirectorControl,
   preflightDisplayItems,
@@ -75,6 +80,7 @@ export function StoryboardControlPanel({
   versions,
   viewMode,
   workflowSummary,
+  showContinuityOnly,
   videoRatio,
   setVideoRatio,
 }: Props) {
@@ -121,6 +127,16 @@ export function StoryboardControlPanel({
           {workflowSummary.preflightFailed > 0 && (
             <span className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">
               待修复 {workflowSummary.preflightFailed}
+            </span>
+          )}
+          {generationMode === "storyboard_grid" && workflowSummary.continuityFailed > 0 && (
+            <span className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-rose-700">
+              连续性待修复 {workflowSummary.continuityFailed}
+            </span>
+          )}
+          {generationMode === "storyboard_grid" && workflowSummary.imageAuditPassed > 0 && (
+            <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-sky-700">
+              成图审计通过 {workflowSummary.imageAuditPassed}
             </span>
           )}
           {workflowSummary.stale > 0 && (
@@ -260,6 +276,8 @@ export function StoryboardControlPanel({
           generatingRefPrompts={generatingRefPrompts}
           generatingSceneFrames={generatingSceneFrames}
           generatingStoryboardPrompts={generatingStoryboardPrompts}
+          hasContinuityRepairTargets={hasContinuityRepairTargets}
+          hasImageAuditRepairTargets={hasImageAuditRepairTargets}
           generatingVideoPrompts={generatingVideoPrompts}
           generatingVideos={generatingVideos}
           generatingVideosOverwrite={generatingVideosOverwrite}
@@ -270,6 +288,8 @@ export function StoryboardControlPanel({
           handleBatchGenerateVideoPrompts={handleBatchGenerateVideoPrompts}
           handleBatchGenerateVideos={handleBatchGenerateVideos}
           handleGenerateRefPrompts={handleGenerateRefPrompts}
+          handleRepairContinuityImages={handleRepairContinuityImages}
+          handleRepairContinuityPrompts={handleRepairContinuityPrompts}
           handleGenerateShots={handleGenerateShots}
           handleGenerateStoryboardPrompts={handleGenerateStoryboardPrompts}
           handlePreviewReplanLongShots={handlePreviewReplanLongShots}
@@ -277,6 +297,7 @@ export function StoryboardControlPanel({
           handleRetryFailed={handleRetryFailed}
           hasReferenceImages={hasReferenceImages}
           lastFailedShots={lastFailedShots}
+          onToggleContinuityOnly={onToggleContinuityOnly}
           previewingReplanLongShots={previewingReplanLongShots}
           replanningLongShots={replanningLongShots}
           sceneFramesOverwrite={sceneFramesOverwrite}
@@ -287,6 +308,7 @@ export function StoryboardControlPanel({
           videoRatio={videoRatio}
           setVideoRatio={setVideoRatio}
           workflowSummary={workflowSummary}
+          showContinuityOnly={showContinuityOnly}
         />
       )}
     </div>

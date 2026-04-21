@@ -2,7 +2,14 @@
 
 import { Button } from "@/components/ui/button";
 import { uploadUrl } from "@/lib/utils/upload-url";
-import { AlertTriangle, Eye, ImageIcon, Loader2, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  Eye,
+  ImageIcon,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+} from "lucide-react";
 import { stageTone } from "./shot-card-utils";
 
 interface ShotCardPreviewSectionProps {
@@ -264,6 +271,114 @@ export function ShotCardPreflightSection({
             AI 修复
           </Button>
         )}
+      </div>
+    </div>
+  );
+}
+
+interface ShotCardContinuitySectionProps {
+  auditAttempts?: number;
+  auditIssues: string[];
+  imageAuditPassed: boolean | null;
+  imageAuditScore: number | null;
+  imageAuditSummary: string | null;
+  auditPassed: boolean | null;
+  auditScore: number | null;
+  hasPromptGroup: boolean;
+  repairingImages: boolean;
+  repairingPrompts: boolean;
+  onRepairImages: () => void;
+  onRepairPrompts: () => void;
+}
+
+export function ShotCardContinuitySection({
+  auditAttempts = 0,
+  auditIssues,
+  imageAuditPassed,
+  imageAuditScore,
+  imageAuditSummary,
+  auditPassed,
+  auditScore,
+  hasPromptGroup,
+  repairingImages,
+  repairingPrompts,
+  onRepairImages,
+  onRepairPrompts,
+}: ShotCardContinuitySectionProps) {
+  return (
+    <div className="rounded-[26px] border border-[--border-subtle] bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[--text-muted]">
+        <ShieldCheck className="h-4 w-4" />
+        四宫格连续性
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+        <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
+          状态 {!hasPromptGroup ? "待生成" : auditPassed === null ? "未评估" : auditPassed ? "通过" : "待修复"}
+        </span>
+        {auditScore !== null && (
+          <span
+            className={`rounded-full px-2.5 py-1 font-medium ${
+              auditPassed ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+            }`}
+          >
+            {auditScore} 分
+          </span>
+        )}
+        {auditAttempts > 0 && (
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
+            {auditAttempts} 次尝试
+          </span>
+        )}
+        {imageAuditScore !== null && (
+          <span
+            className={`rounded-full px-2.5 py-1 font-medium ${
+              imageAuditPassed ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-600"
+            }`}
+          >
+            成图审计 {imageAuditScore} 分
+          </span>
+        )}
+      </div>
+      {!hasPromptGroup ? (
+        <div className="mt-3 rounded-2xl bg-slate-50 px-3 py-2.5 text-xs leading-6 text-[--text-muted]">
+          先生成四宫格提示词，系统才会给出连续性分数和修复建议。
+        </div>
+      ) : auditIssues.length > 0 ? (
+        <div className="mt-3 rounded-2xl bg-amber-50 px-3 py-2.5 text-xs leading-6 text-amber-800">
+          <div className="mb-1 font-medium">当前问题</div>
+          <ul className="space-y-1">
+            {auditIssues.slice(0, 3).map((issue, index) => (
+              <li key={`${issue}-${index}`}>- {issue}</li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-2xl bg-emerald-50 px-3 py-2.5 text-xs leading-6 text-emerald-700">
+          当前四宫格的镜头路径、景别推进和空间锚点基本稳定，可以继续生图或生视频。
+        </div>
+      )}
+      {imageAuditSummary && (
+        <div className="mt-3 rounded-2xl bg-sky-50 px-3 py-2.5 text-xs leading-6 text-sky-700">
+          {imageAuditSummary}
+        </div>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" onClick={onRepairPrompts} disabled={repairingPrompts}>
+          {repairingPrompts ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="h-4 w-4" />
+          )}
+          {auditPassed === false ? "修复四宫格提示词" : "重生成四宫格提示词"}
+        </Button>
+        <Button size="sm" variant="outline" onClick={onRepairImages} disabled={repairingImages}>
+          {repairingImages ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <ImageIcon className="h-4 w-4" />
+          )}
+          {auditPassed === false ? "重生四宫格图片" : "重生成四宫格图片"}
+        </Button>
       </div>
     </div>
   );

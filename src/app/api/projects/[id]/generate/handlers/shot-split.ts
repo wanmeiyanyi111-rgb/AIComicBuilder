@@ -12,6 +12,7 @@ import {
 } from "@/lib/db/schema";
 import { and, desc, eq } from "drizzle-orm";
 import { id as genId } from "@/lib/id";
+import { matchDialogueCharacter } from "@/lib/dialogue-character-match";
 import { buildShotSplitPrompt } from "@/lib/ai/prompts/shot-split";
 import { resolveSlotContents } from "@/lib/ai/prompts/resolver";
 import { getPromptDefinition } from "@/lib/ai/prompts/registry";
@@ -414,7 +415,7 @@ export async function handleShotSplitStream(
 
     for (let i = 0; i < (shot.dialogues || []).length; i++) {
       const dialogue = shot.dialogues[i];
-      const matchedChar = shotCharacters.find((c) => c.name === dialogue.character);
+      const matchedChar = matchDialogueCharacter(dialogue.character, shotCharacters);
       if (matchedChar) {
         await db.insert(dialogues).values({
           id: genId(),
@@ -423,6 +424,14 @@ export async function handleShotSplitStream(
           text: dialogue.text,
           sequence: i,
         });
+      } else if (dialogue.text?.trim()) {
+        console.warn(
+          `[ShotSplit] Unmatched dialogue speaker for shot ${shot.sequence}: speaker="${dialogue.character}", text="${String(
+            dialogue.text
+          )
+            .replace(/\s+/g, " ")
+            .slice(0, 80)}"`
+        );
       }
     }
   }

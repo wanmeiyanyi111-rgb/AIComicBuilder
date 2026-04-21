@@ -20,6 +20,7 @@ import {
   buildKeyframePromptModelRequest,
   buildStoryboardVideoPromptModelRequest,
   clampSegmentDuration,
+  ensureDialogueCoverage,
   ensureDurationPrefix,
   getPanelContinuityRules,
   getPanelMetaNumber,
@@ -225,7 +226,11 @@ export async function buildVideoPromptForShot(params: {
       ...(visionFrames.length > 0 ? { images: visionFrames } : {}),
     });
     videoPrompt = ensureDurationPrefix(
-      enforceVideoPromptRatio(sanitizeModelPrompt(rawPrompt), params.ratio),
+      ensureDialogueCoverage({
+        dialogues: dialogueList,
+        mode: "storyboard_grid",
+        prompt: enforceVideoPromptRatio(sanitizeModelPrompt(rawPrompt), params.ratio),
+      }),
       effectiveDuration
     );
   } else if (genMode === "reference") {
@@ -266,7 +271,11 @@ export async function buildVideoPromptForShot(params: {
       images: visionFrames,
     });
     videoPrompt = ensureDurationPrefix(
-      enforceVideoPromptRatio(sanitizeModelPrompt(rawPrompt), params.ratio),
+      ensureDialogueCoverage({
+        dialogues: dialogueList,
+        mode: "reference",
+        prompt: enforceVideoPromptRatio(sanitizeModelPrompt(rawPrompt), params.ratio),
+      }),
       effectiveDuration
     );
   } else {
@@ -293,7 +302,11 @@ export async function buildVideoPromptForShot(params: {
       throw new Error("invalid keyframe prompt output");
     }
     videoPrompt = ensureDurationPrefix(
-      enforceVideoPromptRatio(cleaned, params.ratio),
+      ensureDialogueCoverage({
+        dialogues: dialogueList,
+        mode: "keyframe",
+        prompt: enforceVideoPromptRatio(cleaned, params.ratio),
+      }),
       effectiveDuration
     );
   }

@@ -9,6 +9,8 @@ import { useModelStore } from "@/stores/model-store";
 import { toast } from "sonner";
 import {
   type Shot,
+  getStoryboardImageAudit,
+  getStoryboardPromptAudit,
   getReferenceVideoUrl,
   getSceneRefFrameUrl,
   getStoryboardGridUrl,
@@ -24,6 +26,7 @@ import {
 } from "lucide-react";
 import { ShotCardDialogs } from "./shot-card-dialogs";
 import {
+  ShotCardContinuitySection,
   ShotCardPreflightSection,
   ShotCardPreviewSection,
   ShotCardPromptSection,
@@ -82,6 +85,7 @@ export function ShotCard({
   const t = useTranslations();
   const getModelConfig = useModelStore((s) => s.getModelConfig);
   const [generatingFrames, setGeneratingFrames] = useState(false);
+  const [generatingStoryboardPrompt, setGeneratingStoryboardPrompt] = useState(false);
   const [generatingPrompt, setGeneratingPrompt] = useState(false);
   const [generatingVideo, setGeneratingVideo] = useState(false);
   const [panelDialogOpen, setPanelDialogOpen] = useState(false);
@@ -101,6 +105,10 @@ export function ShotCard({
     [storyboardPanels]
   );
   const workflow = shot.workflowState;
+  const storyboardAudit =
+    generationMode === "reference" ? null : getStoryboardPromptAudit(shot);
+  const storyboardImageAudit =
+    generationMode === "reference" ? null : getStoryboardImageAudit(shot);
   const hasBoard =
     workflow?.mode === generationMode
       ? workflow.frameReady
@@ -159,6 +167,32 @@ export function ShotCard({
       toast.error(error instanceof Error ? error.message : "生成视频提示词失败");
     } finally {
       setGeneratingPrompt(false);
+    }
+  }
+
+  async function handleGenerateStoryboardPrompt() {
+    setGeneratingStoryboardPrompt(true);
+    try {
+      await runAction("generate_storyboard_prompts");
+      await onUpdate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "生成四宫格提示词失败");
+    } finally {
+      setGeneratingStoryboardPrompt(false);
+    }
+  }
+
+  async function handleRepairStoryboardImages() {
+    setGeneratingFrames(true);
+    try {
+      await runAction("single_storyboard_generate", {
+        overwrite: true,
+      });
+      await onUpdate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重生四宫格图片失败");
+    } finally {
+      setGeneratingFrames(false);
     }
   }
 
@@ -288,6 +322,23 @@ export function ShotCard({
               onOpenVideoPrompt={() => setVideoPromptDialogOpen(true)}
             />
 
+            {generationMode !== "reference" && (
+              <ShotCardContinuitySection
+                auditAttempts={storyboardAudit?.attempts ?? 0}
+                auditIssues={storyboardAudit?.issues ?? []}
+                auditPassed={storyboardAudit?.pass ?? null}
+                auditScore={storyboardAudit?.score ?? null}
+                imageAuditPassed={storyboardImageAudit?.pass ?? null}
+                imageAuditScore={storyboardImageAudit?.score ?? null}
+                imageAuditSummary={storyboardImageAudit?.summary ?? null}
+                hasPromptGroup={hasPromptGroup}
+                repairingImages={generatingFrames || batchGeneratingFrames}
+                repairingPrompts={generatingStoryboardPrompt}
+                onRepairImages={handleRepairStoryboardImages}
+                onRepairPrompts={handleGenerateStoryboardPrompt}
+              />
+            )}
+
             <ShotCardPreflightSection
               preflightFixing={preflightFixing}
               preflightIssueSummary={preflightIssueSummary}
@@ -330,6 +381,21 @@ export function ShotCard({
               ? "重新生成四宫格"
               : "生成四宫格"}
         </Button>
+        {generationMode !== "reference" && (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleGenerateStoryboardPrompt}
+            disabled={generatingStoryboardPrompt}
+          >
+            {generatingStoryboardPrompt ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            {hasPromptGroup ? "重新生成四宫格提示词" : "生成四宫格提示词"}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -337,7 +403,7 @@ export function ShotCard({
           disabled={generatingPrompt || batchGeneratingVideoPrompts}
         >
           {generatingPrompt ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-          生成视频提示词
+          {hasVideoPrompt ? "重新生成视频提示词" : "生成视频提示词"}
         </Button>
         <Button
           size="sm"

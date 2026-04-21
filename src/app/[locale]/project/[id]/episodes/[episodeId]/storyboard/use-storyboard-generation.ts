@@ -3,6 +3,10 @@ import { toast } from "sonner";
 import { ApiError, apiFetch } from "@/lib/api-fetch";
 import { useProjectStore } from "@/stores/project-store";
 import type { Shot } from "@/stores/project-store";
+import {
+  getStoryboardImageAudit,
+  getStoryboardPromptAudit,
+} from "@/stores/project-store";
 import type { BatchProgress, UseStoryboardGenerationParams } from "./storyboard-generation-types";
 import { useStoryboardBatchProgress } from "./use-storyboard-batch-progress";
 import { useStoryboardAutoRun } from "./use-storyboard-auto-run";
@@ -236,6 +240,41 @@ export function useStoryboardGeneration({
     setBatchProgress,
   });
 
+  async function handleRepairContinuityPrompts() {
+    if (!project) return;
+    const targetShotIds = project.shots
+      .filter((shot) => {
+        const audit = getStoryboardPromptAudit(shot);
+        return audit.pass === false || audit.issues.length > 0;
+      })
+      .map((shot) => shot.id);
+    if (targetShotIds.length === 0) {
+      toast.info("当前没有需要修复连续性提示词的镜头");
+      return;
+    }
+    await handleGenerateStoryboardPrompts(targetShotIds);
+  }
+
+  async function handleRepairContinuityImages() {
+    if (!project) return;
+    const targetShotIds = project.shots
+      .filter((shot) => {
+        const promptAudit = getStoryboardPromptAudit(shot);
+        const imageAudit = getStoryboardImageAudit(shot);
+        return (
+          promptAudit.pass === false ||
+          promptAudit.issues.length > 0 ||
+          imageAudit.pass === false
+        );
+      })
+      .map((shot) => shot.id);
+    if (targetShotIds.length === 0) {
+      toast.info("当前没有需要重生图片的连续性问题镜头");
+      return;
+    }
+    await handleBatchGenerateFrames(true, targetShotIds);
+  }
+
   return {
     anyGenerating,
     batchProgress,
@@ -255,6 +294,8 @@ export function useStoryboardGeneration({
     handleBatchGenerateVideoPrompts,
     handleBatchGenerateVideos,
     handleGenerateRefPrompts,
+    handleRepairContinuityImages,
+    handleRepairContinuityPrompts,
     handleGenerateShots,
     handleGenerateStoryboardPrompts,
     handlePreviewReplanLongShots,

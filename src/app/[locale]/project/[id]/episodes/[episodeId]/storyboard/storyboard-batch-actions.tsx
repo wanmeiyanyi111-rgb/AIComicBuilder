@@ -17,6 +17,8 @@ type Props = Pick<
   | "generatingRefPrompts"
   | "generatingSceneFrames"
   | "generatingStoryboardPrompts"
+  | "hasContinuityRepairTargets"
+  | "hasImageAuditRepairTargets"
   | "generatingVideoPrompts"
   | "generatingVideos"
   | "generatingVideosOverwrite"
@@ -27,6 +29,8 @@ type Props = Pick<
   | "handleBatchGenerateVideoPrompts"
   | "handleBatchGenerateVideos"
   | "handleGenerateRefPrompts"
+  | "handleRepairContinuityImages"
+  | "handleRepairContinuityPrompts"
   | "handleGenerateShots"
   | "handleGenerateStoryboardPrompts"
   | "handlePreviewReplanLongShots"
@@ -34,6 +38,7 @@ type Props = Pick<
   | "handleRetryFailed"
   | "hasReferenceImages"
   | "lastFailedShots"
+  | "onToggleContinuityOnly"
   | "previewingReplanLongShots"
   | "replanningLongShots"
   | "sceneFramesOverwrite"
@@ -44,6 +49,7 @@ type Props = Pick<
   | "videoRatio"
   | "setVideoRatio"
   | "workflowSummary"
+  | "showContinuityOnly"
 >;
 
 export function StoryboardBatchActions({
@@ -56,6 +62,8 @@ export function StoryboardBatchActions({
   generatingRefPrompts,
   generatingSceneFrames,
   generatingStoryboardPrompts,
+  hasContinuityRepairTargets,
+  hasImageAuditRepairTargets,
   generatingVideoPrompts,
   generatingVideos,
   generatingVideosOverwrite,
@@ -66,6 +74,8 @@ export function StoryboardBatchActions({
   handleBatchGenerateVideoPrompts,
   handleBatchGenerateVideos,
   handleGenerateRefPrompts,
+  handleRepairContinuityImages,
+  handleRepairContinuityPrompts,
   handleGenerateShots,
   handleGenerateStoryboardPrompts,
   handlePreviewReplanLongShots,
@@ -73,6 +83,7 @@ export function StoryboardBatchActions({
   handleRetryFailed,
   hasReferenceImages,
   lastFailedShots,
+  onToggleContinuityOnly,
   previewingReplanLongShots,
   replanningLongShots,
   sceneFramesOverwrite,
@@ -83,8 +94,16 @@ export function StoryboardBatchActions({
   videoRatio,
   setVideoRatio,
   workflowSummary,
+  showContinuityOnly,
 }: Props) {
   if (totalShots === 0) return null;
+
+  const canBatchGenerateVideoPrompts =
+    generationMode === "reference"
+      ? workflowSummary.framesReady > 0
+      : workflowSummary.framesReady > 0 || shotsWithStoryboardPrompts > 0;
+  const videoPromptButtonLabel =
+    workflowSummary.videoPromptsReady > 0 ? "批量重新生成视频提示词" : t("project.batchGenerateVideoPrompts");
 
   const progressNow = batchProgress
     ? Math.min(
@@ -176,9 +195,9 @@ export function StoryboardBatchActions({
       <div className="flex items-center gap-2 flex-wrap">
         <span className="w-4 h-4 flex-shrink-0 flex items-center justify-center rounded-full bg-[--surface] text-[10px] font-bold text-[--text-muted]">3</span>
         <InlineModelPicker capability="text" />
-        <Button onClick={handleBatchGenerateVideoPrompts} disabled={anyGenerating || workflowSummary.needsVideoPrompts === 0} variant="default" size="sm">
+        <Button onClick={handleBatchGenerateVideoPrompts} disabled={anyGenerating || !canBatchGenerateVideoPrompts} variant="default" size="sm">
           {generatingVideoPrompts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-          {generatingVideoPrompts ? t("common.generating") : t("project.batchGenerateVideoPrompts")}
+          {generatingVideoPrompts ? t("common.generating") : videoPromptButtonLabel}
         </Button>
       </div>
 
@@ -212,6 +231,41 @@ export function StoryboardBatchActions({
           {anyGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
           {t("project.autoRun")}
         </Button>
+        {generationMode === "storyboard_grid" && (
+          <Button
+            onClick={onToggleContinuityOnly}
+            disabled={workflowSummary.continuityFailed === 0}
+            variant={showContinuityOnly ? "default" : "outline"}
+            size="sm"
+          >
+            <RefreshCw className="mr-1 h-4 w-4" />
+            {showContinuityOnly
+              ? `显示全部镜头`
+              : `只看待修复连续性镜头 (${workflowSummary.continuityFailed})`}
+          </Button>
+        )}
+        {generationMode === "storyboard_grid" && (
+          <Button
+            onClick={handleRepairContinuityPrompts}
+            disabled={anyGenerating || !hasContinuityRepairTargets}
+            variant="outline"
+            size="sm"
+          >
+            <Sparkles className="mr-1 h-4 w-4" />
+            批量修复连续性提示词
+          </Button>
+        )}
+        {generationMode === "storyboard_grid" && (
+          <Button
+            onClick={handleRepairContinuityImages}
+            disabled={anyGenerating || !hasImageAuditRepairTargets}
+            variant="outline"
+            size="sm"
+          >
+            <ImageIcon className="mr-1 h-4 w-4" />
+            批量重生问题四宫格
+          </Button>
+        )}
         {lastFailedShots.length > 0 && !batchProgress && (
           <Button
             variant="outline"

@@ -9,6 +9,8 @@ import { useModelStore } from "@/stores/model-store";
 import { toast } from "sonner";
 import {
   type Shot,
+  getStoryboardImageAudit,
+  getStoryboardPromptAudit,
   getReferenceVideoUrl,
   getSceneRefFrameUrl,
   getStoryboardGridUrl,
@@ -61,6 +63,7 @@ export function ShotDrawer({
   const t = useTranslations();
   const getModelConfig = useModelStore((s) => s.getModelConfig);
   const [busyAction, setBusyAction] = useState<"board" | "prompt" | "video" | null>(null);
+  const [generatingStoryboardPrompt, setGeneratingStoryboardPrompt] = useState(false);
 
   const currentIndex = shots.findIndex((shot) => shot.id === openShotId);
   const shot = currentIndex >= 0 ? shots[currentIndex] : null;
@@ -78,6 +81,10 @@ export function ShotDrawer({
   );
   const hasBoard =
     generationMode === "reference" ? !!fallbackImage : !!storyboardGridUrl;
+  const storyboardAudit =
+    generationMode === "reference" || !shot ? null : getStoryboardPromptAudit(shot);
+  const storyboardImageAudit =
+    generationMode === "reference" || !shot ? null : getStoryboardImageAudit(shot);
   const hasPromptGroup =
     generationMode === "reference" ? false : panelPrompts.some((prompt) => !!prompt.trim());
   const hasVideoPrompt = !!shot?.videoPrompt?.trim();
@@ -127,6 +134,30 @@ export function ShotDrawer({
       await callGenerate("single_video_prompt");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "生成视频提示词失败");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function handleGenerateStoryboardPrompt() {
+    if (!shot) return;
+    setGeneratingStoryboardPrompt(true);
+    try {
+      await callGenerate("generate_storyboard_prompts");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "生成四宫格提示词失败");
+    } finally {
+      setGeneratingStoryboardPrompt(false);
+    }
+  }
+
+  async function handleRepairStoryboardImages() {
+    if (!shot) return;
+    setBusyAction("board");
+    try {
+      await callGenerate("single_storyboard_generate", { overwrite: true });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "重生四宫格图片失败");
     } finally {
       setBusyAction(null);
     }
@@ -304,6 +335,99 @@ export function ShotDrawer({
                 </div>
               )}
 
+              {generationMode !== "reference" && (
+                <div className="mt-4 rounded-2xl bg-white/85 p-4">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-[--text-muted]">
+                      四宫格连续性
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 text-[11px]">
+                      <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-600">
+                        {!hasPromptGroup
+                          ? "待生成"
+                          : storyboardAudit?.pass === null
+                            ? "未评估"
+                            : storyboardAudit?.pass
+                              ? "通过"
+                              : "待修复"}
+                      </span>
+                      {storyboardAudit?.score !== null && storyboardAudit?.score !== undefined && (
+                        <span
+                          className={`rounded-full px-2 py-1 font-medium ${
+                            storyboardAudit.pass
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-amber-100 text-amber-700"
+                          }`}
+                        >
+                          {storyboardAudit.score} 分
+                        </span>
+                      )}
+                      {(storyboardAudit?.attempts || 0) > 0 && (
+                        <span className="rounded-full bg-slate-100 px-2 py-1 font-medium text-slate-600">
+                          {storyboardAudit?.attempts} 次尝试
+                        </span>
+                      )}
+                      {storyboardImageAudit?.score !== null &&
+                        storyboardImageAudit?.score !== undefined && (
+                          <span
+                            className={`rounded-full px-2 py-1 font-medium ${
+                              storyboardImageAudit.pass
+                                ? "bg-sky-100 text-sky-700"
+                                : "bg-slate-100 text-slate-600"
+                            }`}
+                          >
+                            成图审计 {storyboardImageAudit.score} 分
+                          </span>
+                        )}
+                    </div>
+                  </div>
+                  {storyboardAudit?.issues?.length ? (
+                    <div className="rounded-2xl bg-amber-50 p-3 text-xs leading-6 text-amber-800">
+                      {storyboardAudit.issues.slice(0, 4).map((issue, index) => (
+                        <div key={`${shot.id}-audit-issue-${index}`}>- {issue}</div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl bg-emerald-50 p-3 text-xs leading-6 text-emerald-700">
+                      {hasPromptGroup
+                        ? "当前四宫格的镜头推进与空间锚点基本稳定。"
+                        : "先生成四宫格提示词，系统才会给出连续性审计。"}
+                    </div>
+                  )}
+                  {storyboardImageAudit?.summary && (
+                    <div className="mt-3 rounded-2xl bg-sky-50 p-3 text-xs leading-6 text-sky-700">
+                      {storyboardImageAudit.summary}
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={handleGenerateStoryboardPrompt}
+                      disabled={generatingStoryboardPrompt || anyGenerating}
+                    >
+                      {generatingStoryboardPrompt ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-4 w-4" />
+                      )}
+                      {storyboardAudit?.pass === false ? "修复四宫格提示词" : "重生成四宫格提示词"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={handleRepairStoryboardImages}
+                      disabled={busyAction === "board" || anyGenerating}
+                    >
+                      {busyAction === "board" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ImageIcon className="h-4 w-4" />
+                      )}
+                      {storyboardAudit?.pass === false ? "重生四宫格图片" : "重生成四宫格图片"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <div className="mt-4 rounded-2xl bg-white/85 p-4">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="text-xs font-semibold uppercase tracking-wide text-[--text-muted]">
@@ -336,13 +460,27 @@ export function ShotDrawer({
                 ? "重新生成四宫格"
                 : "生成四宫格"}
           </Button>
+          {generationMode !== "reference" && (
+            <Button
+              variant="outline"
+              onClick={handleGenerateStoryboardPrompt}
+              disabled={generatingStoryboardPrompt || anyGenerating}
+            >
+              {generatingStoryboardPrompt ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Sparkles className="h-4 w-4" />
+              )}
+              {hasPromptGroup ? "重新生成四宫格提示词" : "生成四宫格提示词"}
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={handleGeneratePrompt}
             disabled={busyAction === "prompt" || anyGenerating}
           >
             {busyAction === "prompt" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-            生成视频提示词
+            {hasVideoPrompt ? "重新生成视频提示词" : "生成视频提示词"}
           </Button>
           <Button onClick={handleGenerateVideo} disabled={busyAction === "video" || anyGenerating}>
             {busyAction === "video" ? <Loader2 className="h-4 w-4 animate-spin" /> : <PlayCircle className="h-4 w-4" />}

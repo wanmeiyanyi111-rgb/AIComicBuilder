@@ -15,6 +15,55 @@ export function sanitizeModelPrompt(raw: string): string {
   return noFence.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+type DialogueItem = {
+  characterName: string;
+  text: string;
+  offscreen?: boolean;
+  visualHint?: string;
+};
+
+function normalizePromptText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function buildDialogueLine(
+  item: DialogueItem,
+  mode: "storyboard_grid" | "reference" | "keyframe"
+): string {
+  const cleanText = item.text.trim();
+  if (mode === "reference") {
+    return item.offscreen
+      ? `画外音：${item.characterName}："${cleanText}"`
+      : `${item.characterName}台词："${cleanText}"`;
+  }
+
+  const name = item.visualHint
+    ? `${item.characterName}（${item.visualHint}）`
+    : item.characterName;
+  return item.offscreen
+    ? `【画外音】${name}: "${cleanText}"`
+    : `【对白口型】${name}: "${cleanText}"`;
+}
+
+export function ensureDialogueCoverage(params: {
+  dialogues?: DialogueItem[];
+  mode: "storyboard_grid" | "reference" | "keyframe";
+  prompt: string;
+}) {
+  const prompt = (params.prompt || "").trim();
+  const dialogues = (params.dialogues || []).filter((item) => item.text?.trim());
+  if (dialogues.length === 0) return prompt;
+
+  const normalizedPrompt = normalizePromptText(prompt);
+  const missingLines = dialogues
+    .filter((item) => !normalizedPrompt.includes(normalizePromptText(item.text)))
+    .map((item) => buildDialogueLine(item, params.mode));
+
+  if (missingLines.length === 0) return prompt;
+
+  return `${prompt}\n\n${missingLines.join("\n")}`.trim();
+}
+
 export function ensureDurationPrefix(prompt: string, duration: number): string {
   const p = (prompt || "").trim();
   if (!p) return `Duration: ${duration}s.`;

@@ -53,7 +53,33 @@ export interface ShotAsset {
   characters: string[] | null;
   modelProvider?: string | null;
   modelId?: string | null;
-  meta?: { sceneName?: string } | null;
+  meta?:
+    | ({
+        sceneName?: string;
+        continuityAuditScore?: number;
+        continuityAuditPass?: boolean;
+        continuityAuditIssues?: string[];
+        continuityAuditAttempts?: number;
+        stage?: string;
+        beat?: string;
+        panelIndex?: number;
+      } & Record<string, unknown>)
+    | null;
+}
+
+export interface StoryboardPromptAuditSnapshot {
+  score: number | null;
+  pass: boolean | null;
+  issues: string[];
+  attempts: number;
+}
+
+export interface StoryboardImageAuditSnapshot {
+  score: number | null;
+  pass: boolean | null;
+  stage: string | null;
+  summary: string | null;
+  issues: string[];
 }
 
 export interface StoryboardWorkflowState {
@@ -192,6 +218,74 @@ export function getStoryboardVideoUrl(shot: ShotLike): string | null {
 /** Prompt text for each storyboard panel. */
 export function getStoryboardPanelPrompts(shot: ShotLike): string[] {
   return getStoryboardPanels(shot).map((asset) => asset.prompt || "");
+}
+
+export function getStoryboardPromptAudit(
+  shot: ShotLike
+): StoryboardPromptAuditSnapshot {
+  const panels = getStoryboardPanels(shot).slice(0, 4);
+  const metas = panels.map((panel) => panel.meta).filter(Boolean);
+  const score = metas.find((meta) => typeof meta?.continuityAuditScore === "number")
+    ?.continuityAuditScore;
+  const pass = metas.find((meta) => typeof meta?.continuityAuditPass === "boolean")
+    ?.continuityAuditPass;
+  const attempts = metas.reduce((max, meta) => {
+    const value =
+      typeof meta?.continuityAuditAttempts === "number"
+        ? meta.continuityAuditAttempts
+        : 0;
+    return Math.max(max, value);
+  }, 0);
+  const issues = [
+    ...new Set(
+      metas.flatMap((meta) =>
+        Array.isArray(meta?.continuityAuditIssues)
+          ? meta.continuityAuditIssues
+              .map((item) => String(item || "").trim())
+              .filter(Boolean)
+          : []
+      )
+    ),
+  ];
+  return {
+    score: typeof score === "number" ? score : null,
+    pass: typeof pass === "boolean" ? pass : null,
+    issues,
+    attempts,
+  };
+}
+
+export function getStoryboardImageAudit(
+  shot: ShotLike
+): StoryboardImageAuditSnapshot {
+  const grid = activeAssets(shot).find(
+    (asset) => asset.type === "storyboard_grid" && asset.sequenceInType === 0
+  );
+  const meta = grid?.meta;
+  const issues = Array.isArray(meta?.continuityImageAuditIssues)
+    ? meta.continuityImageAuditIssues
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+    : [];
+  return {
+    score:
+      typeof meta?.continuityImageAuditScore === "number"
+        ? meta.continuityImageAuditScore
+        : null,
+    pass:
+      typeof meta?.continuityImageAuditPass === "boolean"
+        ? meta.continuityImageAuditPass
+        : null,
+    stage:
+      typeof meta?.continuityImageAuditStage === "string"
+        ? meta.continuityImageAuditStage
+        : null,
+    summary:
+      typeof meta?.continuityImageAuditSummary === "string"
+        ? meta.continuityImageAuditSummary
+        : null,
+    issues,
+  };
 }
 
 /** Whether all four storyboard panels have files generated. */

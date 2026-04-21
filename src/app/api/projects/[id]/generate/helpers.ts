@@ -85,20 +85,45 @@ export function buildStoryboardPanelImagePrompt(params: {
   panelIndex?: number | null;
   stage?: string | null;
   beat?: string | null;
+  panelFunction?: string | null;
+  activeCharacters?: unknown;
+  forbiddenDrift?: unknown;
+  resultSignal?: string | null;
+  cameraPlan?: string | null;
+  shotScale?: string | null;
+  subjectPosition?: string | null;
+  bodyFacing?: string | null;
+  gazeTarget?: string | null;
+  interactionState?: string | null;
+  worldLock?: unknown;
+  continuityGoal?: string | null;
+  progressionMode?: string | null;
   storyGoal?: string | null;
+  modeRationale?: string | null;
   primaryScene?: string | null;
   startingAction?: string | null;
   endingAction?: string | null;
   continuityBeats?: unknown;
   mustKeep?: unknown;
   delta?: string | null;
+  previousPanelSummary?: string | null;
+  antiCollapseHint?: string | null;
 }): string {
   const basePrompt = enforceFramePromptRatio(params.basePrompt || "", params.ratio);
   const continuityBeats = Array.isArray(params.continuityBeats)
     ? params.continuityBeats.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
+  const activeCharacters = Array.isArray(params.activeCharacters)
+    ? params.activeCharacters.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const forbiddenDrift = Array.isArray(params.forbiddenDrift)
+    ? params.forbiddenDrift.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
   const mustKeep = Array.isArray(params.mustKeep)
     ? params.mustKeep.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const worldLock = Array.isArray(params.worldLock)
+    ? params.worldLock.map((item) => String(item || "").trim()).filter(Boolean)
     : [];
 
   const contextBlocks = [
@@ -106,17 +131,43 @@ export function buildStoryboardPanelImagePrompt(params: {
     params.panelIndex ? `当前格序号：第${params.panelIndex}格。` : "",
     params.stage ? `当前格阶段：${params.stage}。` : "",
     params.beat ? `当前格剧情职责：${params.beat}。` : "",
+    params.panelFunction ? `本格叙事功能：${params.panelFunction}。` : "",
+    activeCharacters.length > 0
+      ? `本格必须真实出现角色：${activeCharacters.join("、")}。禁止无故丢失关键角色或替换成其他人物。`
+      : "",
+    forbiddenDrift.length > 0
+      ? `本格禁止漂移：${forbiddenDrift.join("、")}。`
+      : "",
+    params.resultSignal ? `本格结果信号：${params.resultSignal}。` : "",
+    params.cameraPlan ? `镜头主路径锁定：${params.cameraPlan}。` : "",
+    params.shotScale ? `当前格景别锁定：${params.shotScale}。` : "",
+    params.subjectPosition ? `主体位置约束：${params.subjectPosition}。` : "",
+    params.bodyFacing ? `主体朝向约束：${params.bodyFacing}。` : "",
+    params.gazeTarget ? `主体视线焦点：${params.gazeTarget}。` : "",
+    params.interactionState ? `关系状态：${params.interactionState}。` : "",
+    params.progressionMode ? `四格推进模式：${params.progressionMode}。` : "",
     params.storyGoal ? `本段剧情唯一目标：${params.storyGoal}。` : "",
+    params.modeRationale ? `推进方式说明：${params.modeRationale}。` : "",
     params.primaryScene ? `主场景锁定：${params.primaryScene}。` : "",
     params.startingAction ? `起始动作：${params.startingAction}。` : "",
     params.endingAction ? `结束动作：${params.endingAction}。` : "",
     continuityBeats.length > 0
       ? `中段连续变化：${continuityBeats.join("；")}。`
       : "",
+    params.continuityGoal
+      ? `本格连续性目标：${params.continuityGoal}。`
+      : "",
+    worldLock.length > 0
+      ? `跨四格世界锁定：${worldLock.join("、")}。`
+      : "",
     mustKeep.length > 0
       ? `本格必须继承不变：${mustKeep.join("、")}。`
       : "",
     params.delta ? `本格相对上一格只允许的变化：${params.delta}。` : "",
+    params.previousPanelSummary
+      ? `上一格连续性摘要：${params.previousPanelSummary}。当前这一格必须在剧情上承接上一格，但必须形成新的时间切片，禁止直接复制上一格的构图、人物姿态或画面布局。`
+      : "",
+    params.antiCollapseHint ? `额外修复要求：${params.antiCollapseHint}` : "",
     "导演约束：这是一张服务剧情演绎的单帧电影画面，只表现当前时间切片，不得额外发散成多个同时发生的镜头。",
     "硬性禁止：四联画、九宫格、拼贴、分屏、漫画页、故事板版式、接触表、画中画、重复人物排版、文字标题、字幕、编号、注释箭头、排版边框。",
     "输出要求：只生成一张完整、干净、单镜头、单时间切片的电影级画面。",

@@ -15,6 +15,7 @@ import {
   ratioToImageOpts,
 } from "../helpers";
 import type { ModelConfig } from "../types";
+import { auditGeneratedStoryboardImages } from "./storyboard-image-audit";
 
 export async function generateStoryboardPanelsForShot(params: {
   projectId: string;
@@ -46,61 +47,155 @@ export async function generateStoryboardPanelsForShot(params: {
     : process.env.UPLOAD_DIR || "./uploads";
   const imageProvider = resolveImageProvider(params.modelConfig, versionedUploadDir);
   const imageOpts = ratioToImageOpts(params.ratio);
+  const orderedPanels = panelAssets
+    .slice(0, 4)
+    .sort((a, b) => a.sequenceInType - b.sequenceInType);
 
-  const panelPaths: string[] = [];
-  for (const panel of panelAssets.slice(0, 4)) {
-    if (!params.overwrite && panel.fileUrl) {
-      panelPaths.push(panel.fileUrl);
-      continue;
-    }
-    const imagePrompt = buildStoryboardPanelImagePrompt({
-      basePrompt: panel.prompt,
-      ratio: params.ratio,
+  const renderPanels = async (antiCollapseHint?: string | null) => {
+    const panelPaths: string[] = [];
+    for (let panelIndex = 0; panelIndex < orderedPanels.length; panelIndex += 1) {
+      const panel = orderedPanels[panelIndex];
+      const previousPanel = panelIndex > 0 ? orderedPanels[panelIndex - 1] : null;
+      if (!params.overwrite && !antiCollapseHint && panel.fileUrl) {
+        panelPaths.push(panel.fileUrl);
+        continue;
+      }
+      const imagePrompt = buildStoryboardPanelImagePrompt({
+        basePrompt: panel.prompt,
+        ratio: params.ratio,
       panelIndex: panel.sequenceInType + 1,
       stage: typeof panel.meta?.stage === "string" ? panel.meta.stage : null,
       beat: typeof panel.meta?.beat === "string" ? panel.meta.beat : null,
-      storyGoal:
-        typeof panel.meta?.storyGoal === "string" ? panel.meta.storyGoal : null,
-      primaryScene:
-        typeof panel.meta?.primaryScene === "string" ? panel.meta.primaryScene : null,
-      startingAction:
-        typeof panel.meta?.startingAction === "string"
-          ? panel.meta.startingAction
+      panelFunction:
+        typeof panel.meta?.panelFunction === "string"
+          ? panel.meta.panelFunction
           : null,
-      endingAction:
-        typeof panel.meta?.endingAction === "string"
-          ? panel.meta.endingAction
+      activeCharacters: panel.meta?.activeCharacters,
+      forbiddenDrift: panel.meta?.forbiddenDrift,
+      resultSignal:
+        typeof panel.meta?.resultSignal === "string"
+          ? panel.meta.resultSignal
           : null,
-      continuityBeats: panel.meta?.continuityBeats,
-      mustKeep: panel.meta?.mustKeep,
-      delta: typeof panel.meta?.delta === "string" ? panel.meta.delta : null,
-    });
-    const imagePath = await imageProvider.generateImage(imagePrompt, {
-      quality: "hd",
-      ...imageOpts,
-      referenceImages: resources.referenceImages.map((item) => item.imageUrl),
-      referenceLabels: resources.referenceImages.map(
-        (item) => `${item.kind}:${item.label}`
-      ),
-    });
-    await insertAssetVersion({
-      shotId: shot.id,
-      type: "storyboard_panel",
-      sequenceInType: panel.sequenceInType,
-      prompt: panel.prompt,
-      fileUrl: imagePath,
-      status: "completed",
-      characters: panel.characters,
-      meta: {
-        ...(panel.meta || {}),
-        workflow: "storyboard_grid",
-      },
-    });
-    panelPaths.push(imagePath);
-  }
+      cameraPlan:
+          typeof panel.meta?.cameraPlan === "string" ? panel.meta.cameraPlan : null,
+        shotScale:
+          typeof panel.meta?.shotScale === "string" ? panel.meta.shotScale : null,
+        subjectPosition:
+          typeof panel.meta?.subjectPosition === "string"
+            ? panel.meta.subjectPosition
+            : null,
+        bodyFacing:
+          typeof panel.meta?.bodyFacing === "string" ? panel.meta.bodyFacing : null,
+        gazeTarget:
+          typeof panel.meta?.gazeTarget === "string" ? panel.meta.gazeTarget : null,
+        interactionState:
+          typeof panel.meta?.interactionState === "string"
+            ? panel.meta.interactionState
+            : null,
+        worldLock: panel.meta?.worldLock,
+        continuityGoal:
+          typeof panel.meta?.continuityGoal === "string"
+            ? panel.meta.continuityGoal
+            : null,
+        progressionMode:
+          typeof panel.meta?.progressionMode === "string"
+            ? panel.meta.progressionMode
+            : null,
+        storyGoal:
+          typeof panel.meta?.storyGoal === "string" ? panel.meta.storyGoal : null,
+        modeRationale:
+          typeof panel.meta?.modeRationale === "string"
+            ? panel.meta.modeRationale
+            : null,
+        primaryScene:
+          typeof panel.meta?.primaryScene === "string" ? panel.meta.primaryScene : null,
+        startingAction:
+          typeof panel.meta?.startingAction === "string"
+            ? panel.meta.startingAction
+            : null,
+        endingAction:
+          typeof panel.meta?.endingAction === "string"
+            ? panel.meta.endingAction
+            : null,
+        continuityBeats: panel.meta?.continuityBeats,
+        mustKeep: panel.meta?.mustKeep,
+        delta: typeof panel.meta?.delta === "string" ? panel.meta.delta : null,
+        previousPanelSummary:
+          previousPanel
+            ? [
+                typeof previousPanel.meta?.shotScale === "string"
+                  ? `上一格景别=${previousPanel.meta.shotScale}`
+                  : "",
+                typeof previousPanel.meta?.subjectPosition === "string"
+                  ? `上一格主体位置=${previousPanel.meta.subjectPosition}`
+                  : "",
+                typeof previousPanel.meta?.bodyFacing === "string"
+                  ? `上一格朝向=${previousPanel.meta.bodyFacing}`
+                  : "",
+                typeof previousPanel.meta?.interactionState === "string"
+                  ? `上一格关系状态=${previousPanel.meta.interactionState}`
+                  : "",
+                typeof previousPanel.meta?.continuityGoal === "string"
+                  ? `上一格连续性目标=${previousPanel.meta.continuityGoal}`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join("；")
+            : null,
+        antiCollapseHint,
+      });
+      const imagePath = await imageProvider.generateImage(imagePrompt, {
+        quality: "hd",
+        ...imageOpts,
+        referenceImages: resources.referenceImages.map((item) => item.imageUrl),
+        referenceLabels: resources.referenceImages.map(
+          (item) => `${item.kind}:${item.label}`
+        ),
+      });
+      await insertAssetVersion({
+        shotId: shot.id,
+        type: "storyboard_panel",
+        sequenceInType: panel.sequenceInType,
+        prompt: panel.prompt,
+        fileUrl: imagePath,
+        status: "completed",
+        characters: panel.characters,
+        meta: {
+          ...(panel.meta || {}),
+          workflow: "storyboard_grid",
+        },
+      });
+      panelPaths.push(imagePath);
+    }
+    return panelPaths;
+  };
+
+  let panelPaths = await renderPanels(null);
 
   await deleteAssetsByType(shot.id, "storyboard_grid");
   await deleteAssetsByType(shot.id, "storyboard_video");
+
+  let imageAudit = await auditGeneratedStoryboardImages(
+    orderedPanels.map((panel, index) => ({
+      fileUrl: panelPaths[index] || panel.fileUrl,
+      meta: panel.meta && typeof panel.meta === "object" ? panel.meta : null,
+    }))
+  );
+
+  if (
+    !imageAudit.pass &&
+    imageAudit.issues.some((item) => item.includes("视觉相似度过高"))
+  ) {
+    panelPaths = await renderPanels(
+      "上一轮四宫格出现了相邻格高度重复。你这次必须让四格形成清晰递进：每一格都要有明显不同的主体位置、动作阶段和构图，不允许任何两格看起来像同一张图。"
+    );
+    imageAudit = await auditGeneratedStoryboardImages(
+      orderedPanels.map((panel, index) => ({
+        fileUrl: panelPaths[index] || panel.fileUrl,
+        meta: panel.meta && typeof panel.meta === "object" ? panel.meta : null,
+      }))
+    );
+  }
 
   const gridPath = await composeStoryboardGrid({
     panelPaths,
@@ -156,6 +251,11 @@ export async function generateStoryboardPanelsForShot(params: {
         typeof panelAssets[0].meta.continuityRules === "object"
           ? panelAssets[0].meta.continuityRules
           : null,
+      continuityImageAuditScore: imageAudit.score,
+      continuityImageAuditPass: imageAudit.pass,
+      continuityImageAuditStage: imageAudit.stage,
+      continuityImageAuditSummary: imageAudit.summary,
+      continuityImageAuditIssues: imageAudit.issues,
       workflow: "storyboard_grid",
       ratio: params.ratio,
     },

@@ -25,6 +25,8 @@ export type StoryboardControlPanelProps = {
   generatingRefPrompts: boolean;
   generatingSceneFrames: boolean;
   generatingStoryboardPrompts: boolean;
+  hasContinuityRepairTargets: boolean;
+  hasImageAuditRepairTargets: boolean;
   generatingVideoPrompts: boolean;
   generatingVideos: boolean;
   generatingVideosOverwrite: boolean;
@@ -37,6 +39,8 @@ export type StoryboardControlPanelProps = {
   handleBatchGenerateVideoPrompts: () => void;
   handleBatchGenerateVideos: (overwrite?: boolean) => void;
   handleGenerateRefPrompts: () => void;
+  handleRepairContinuityImages: () => void;
+  handleRepairContinuityPrompts: () => void;
   handleGenerateShots: () => void;
   handleGenerateStoryboardPrompts: () => void;
   handlePreviewReplanLongShots: () => void;
@@ -50,6 +54,7 @@ export type StoryboardControlPanelProps = {
   onRefreshStoryboardView: () => Promise<void>;
   onSelectVersion: (versionId: string) => void;
   onSetCompareMode: (value: boolean) => void;
+  onToggleContinuityOnly: () => void;
   onToggleVersionDropdown: (value: boolean | ((prev: boolean) => boolean)) => void;
   onUpdateDirectorControl: (
     key: "actionIntensity" | "cameraMotion" | "emotionIntensity",
@@ -105,10 +110,15 @@ export type StoryboardControlPanelProps = {
     stale: number;
     preflightPassed: number;
     preflightFailed: number;
+    continuityPassed: number;
+    continuityFailed: number;
+    imageAuditPassed: number;
+    imageAuditFailed: number;
     needsFrames: number;
     needsVideoPrompts: number;
     needsVideos: number;
   };
+  showContinuityOnly: boolean;
   fixingAllPreflight: boolean;
   fixingPreflightShotId: string | null;
   videoRatio: string;

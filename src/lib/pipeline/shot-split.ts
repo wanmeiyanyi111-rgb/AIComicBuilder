@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
 import { shots, dialogues, characters, characterRelations, scenes, projects, episodes } from "@/lib/db/schema";
+import { matchDialogueCharacter } from "@/lib/dialogue-character-match";
 import { resolveAIProvider } from "@/lib/ai/provider-factory";
 import type { ModelConfigPayload } from "@/lib/ai/provider-factory";
 import { buildShotSplitPrompt } from "@/lib/ai/prompts/shot-split";
@@ -166,9 +167,7 @@ export async function handleShotSplit(task: Task) {
     const shotDialogues = (shotData.dialogues as Array<{ character: string; text: string }>) || [];
     for (let i = 0; i < shotDialogues.length; i++) {
       const dialogue = shotDialogues[i];
-      const matchedChar = projectCharacters.find(
-        (c) => c.name === dialogue.character
-      );
+      const matchedChar = matchDialogueCharacter(dialogue.character, projectCharacters);
       if (matchedChar) {
         await db.insert(dialogues).values({
           id: genId(),
@@ -177,6 +176,14 @@ export async function handleShotSplit(task: Task) {
           text: dialogue.text,
           sequence: i,
         });
+      } else if (dialogue.text?.trim()) {
+        console.warn(
+          `[PipelineShotSplit] Unmatched dialogue speaker: speaker="${dialogue.character}", text="${String(
+            dialogue.text
+          )
+            .replace(/\s+/g, " ")
+            .slice(0, 80)}"`
+        );
       }
     }
 

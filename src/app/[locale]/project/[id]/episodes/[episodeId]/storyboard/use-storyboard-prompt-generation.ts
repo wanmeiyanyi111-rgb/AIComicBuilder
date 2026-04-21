@@ -36,6 +36,17 @@ type Params = {
   videoRatio: string;
 };
 
+function normalizeTargetShotIds(targetShotIds?: string | string[] | null): string[] {
+  if (Array.isArray(targetShotIds)) {
+    return targetShotIds.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+  if (typeof targetShotIds === "string") {
+    const normalized = targetShotIds.trim();
+    return normalized ? [normalized] : [];
+  }
+  return [];
+}
+
 export function useStoryboardPromptGeneration({
   directorControl,
   fetchProject,
@@ -83,10 +94,13 @@ export function useStoryboardPromptGeneration({
     }
   }
 
-  async function handleGenerateStoryboardPrompts() {
+  async function handleGenerateStoryboardPrompts(targetShotIds?: string | string[] | null) {
     if (!project) return;
     if (!textGuard()) return;
-    const targets = [...project.shots].sort((a, b) => a.sequence - b.sequence);
+    const targetIdSet = new Set(normalizeTargetShotIds(targetShotIds));
+    const targets = [...project.shots]
+      .filter((shot) => targetIdSet.size === 0 || targetIdSet.has(shot.id))
+      .sort((a, b) => a.sequence - b.sequence);
     if (targets.length === 0) {
       toast.info("暂无可生成四宫格提示词的镜头");
       return;
@@ -184,7 +198,6 @@ export function useStoryboardPromptGeneration({
     if (!project) return;
     const targets = [...project.shots]
       .filter((shot) => {
-        if (hasVideoPromptForShot(shot)) return false;
         if (generationMode === "reference") {
           return hasReferenceFrameForShot(shot);
         }
@@ -270,7 +283,7 @@ export function useStoryboardPromptGeneration({
             : `${failedIds.length}/${targets.length} 个镜头视频提示词生成失败`
         );
       } else {
-        toast.success(`已逐条生成 ${targets.length} 个镜头的视频提示词`);
+        toast.success(`已逐条更新 ${targets.length} 个镜头的视频提示词`);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("common.generationFailed"));
